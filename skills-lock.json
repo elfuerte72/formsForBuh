@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "skills": {
+    "fastapi": {
+      "source": "fastapi/fastapi",
+      "sourceType": "github",
+      "computedHash": "ee23d5285caf055cf164ff45dd34888d381143564666baacab8aa786f22e413a"
+    },
+    "gws-drive": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "computedHash": "d637ff849b82a9fc195bcfedea260cffe94eaa31b843b28cd04313b1720bb153"
+    },
+    "gws-sheets": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "computedHash": "21c951f8bf399bb941740ab8b048157b43088ad96b743976e88abb0046d263d2"
+    },
+    "uv": {
+      "source": "astral-sh/claude-code-plugins",
+      "sourceType": "github",
+      "computedHash": "b1ca9e9826d906f6ee6ea172da50018ec13bb622ac9ba7204bda8b10e7fc8d0a"
+    }
+  }
+}

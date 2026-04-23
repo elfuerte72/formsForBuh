@@ -1,0 +1,56 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# --- Virtualenvs (must not leak into the image) ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# --- VCS ---
+.git/
+.gitignore
+.gitattributes
+
+# --- Agent/AI factory context (not needed at runtime) ---
+.ai-factory/
+.ai-factory.json
+.claude/
+.mcp.json
+skills-lock.json
+AGENTS.md
+README.md
+
+# --- Raw samples / fixtures / docs (not shipped to prod) ---
+tests/
+Screenshot*.png
+*.pdf
+
+# --- Docker / Railway meta (build context shouldn't include itself) ---
+Dockerfile
+.dockerignore
+compose.yml
+compose.*.yml
+docker-compose.yml
+docker-compose.*.yml
+railway.toml
+railway.json
