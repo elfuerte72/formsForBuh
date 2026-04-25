@@ -1,79 +1,116 @@
-"""Stage 1 pipeline: webhook payload → extracted UPD record logged as JSON."""
+"""Stage 1 pipeline: uploaded UPD → Vision extraction → Google Sheets row.
+
+Synchronous flow (the HTTP handler awaits the full pipeline before responding):
+the user is shown the result on the form. All exceptions are translated into
+:class:`UploadResult` with ``ok=False`` so the handler can render an error banner.
+"""
 
 from __future__ import annotations
 
+from app.config import Settings
 from app.core.errors import (
     AppError,
-    FileDownloadError,
+    SheetsAppendError,
     UnsupportedFileTypeError,
     VisionExtractionError,
 )
 from app.core.logging import bind_correlation_id, get_logger
-from app.models import WebhookPayload
+from app.models import UploadResult
 from app.services.files import FilesService
+from app.services.sheets import SheetsService
 from app.services.vision import VisionService
 
 log = get_logger("pipeline.upd_upload")
 
 
 async def process_upd(
-    payload: WebhookPayload,
+    *,
+    raw: bytes,
+    filename: str,
+    media_type: str,
+    foreman: str,
     files: FilesService,
     vision: VisionService,
-    *,
-    correlation_id: str | None = None,
-) -> None:
-    """Download → to_png → Claude Vision → log the extracted record.
+    sheets: SheetsService,
+    settings: Settings,
+    correlation_id: str,
+) -> UploadResult:
+    """Normalise → Vision → (maybe) Sheets → return :class:`UploadResult`.
 
-    Services are injected as parameters (no globals); pipeline never imports
-    external SDKs directly. All exceptions are caught and logged — background
-    tasks must not crash the event loop, and the webhook response has already
-    gone out.
+    Decision rules:
+    - ``record.needs_review`` (any required field is None): row is NOT written
+      to Sheets. Returned result has ``ok=True, needs_review=True`` so the
+      frontend shows a warning. Bookkeeper investigates from the logs.
+    - All four fields present: row is appended, ``sheet_url`` returned.
+    - SDK error from any service: ``ok=False`` with a stable machine code
+      in ``error`` (``unsupported_file_type``, ``vision_extraction_error``,
+      ``sheets_append_error``, ``app_error``, ``unexpected_error``).
     """
-    with bind_correlation_id(correlation_id) as cid:
+    with bind_correlation_id(correlation_id):
         log.info(
             "upd.received",
-            foreman=payload.foreman,
-            file_name=payload.file_name,
-            file_url=str(payload.file_url),
-            submitted_at=payload.submitted_at.isoformat() if payload.submitted_at else None,
-            form_id=payload.form_id,
-            correlation_id=cid,
+            foreman=foreman,
+            filename=filename,
+            media_type=media_type,
+            bytes=len(raw),
         )
 
         try:
-            raw, media_type = await files.download(str(payload.file_url))
-            png = await files.to_png(
-                raw, filename=payload.file_name, media_type=media_type
-            )
+            png = await files.to_png(raw, filename=filename, media_type=media_type)
             record = await vision.extract(png.data, media_type=png.media_type)
             record_dump = record.model_dump(mode="json")
             log.info(
                 "upd.extracted",
-                **record_dump,
-                foreman=payload.foreman,
-                file_name=payload.file_name,
+                **{k: v for k, v in record_dump.items() if k != "needs_review"},
+                foreman=foreman,
+                filename=filename,
             )
+
             if record.needs_review:
-                missing = [
-                    k
-                    for k in ("organization", "date", "amount", "upd_number")
-                    if record_dump.get(k) is None
-                ]
+                missing = record.missing_fields()
                 log.warning(
                     "upd.needs_review",
-                    foreman=payload.foreman,
-                    file_name=payload.file_name,
+                    foreman=foreman,
+                    filename=filename,
                     missing_fields=missing,
-                    note="Документ не распознан полностью — требуется ручная проверка бухгалтером",
                 )
-        except FileDownloadError as exc:
-            log.exception("upd.download_failed", error=str(exc))
+                return UploadResult(
+                    ok=True,
+                    correlation_id=correlation_id,
+                    record=record,
+                    needs_review=True,
+                    missing_fields=missing,
+                )
+
+            await sheets.append_row(record, foreman=foreman, correlation_id=correlation_id)
+            return UploadResult(
+                ok=True,
+                correlation_id=correlation_id,
+                record=record,
+                sheet_url=settings.sheet_url,
+                needs_review=False,
+            )
+
         except UnsupportedFileTypeError as exc:
-            log.exception("upd.unsupported_file", error=str(exc))
+            log.warning("upd.unsupported_file", error=str(exc))
+            return UploadResult(
+                ok=False, correlation_id=correlation_id, error="unsupported_file_type"
+            )
         except VisionExtractionError as exc:
             log.exception("upd.extract_failed", error=str(exc))
-        except AppError as exc:  # catch-all for domain errors
+            return UploadResult(
+                ok=False, correlation_id=correlation_id, error="vision_extraction_error"
+            )
+        except SheetsAppendError as exc:
+            log.exception("upd.sheets_failed", error=str(exc))
+            return UploadResult(
+                ok=False, correlation_id=correlation_id, error="sheets_append_error"
+            )
+        except AppError as exc:
             log.exception("upd.app_error", error=str(exc))
+            return UploadResult(ok=False, correlation_id=correlation_id, error="app_error")
         except Exception as exc:  # pragma: no cover - safety net
             log.exception("upd.unexpected_error", error=str(exc))
+            return UploadResult(
+                ok=False, correlation_id=correlation_id, error="unexpected_error"
+            )

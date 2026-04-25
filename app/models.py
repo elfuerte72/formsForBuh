@@ -3,28 +3,17 @@
 from __future__ import annotations
 
 from datetime import date as Date
-from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class _Base(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
 
-class WebhookPayload(_Base):
-    """Payload posted by Yandex Forms to POST /webhook/yandex-form.
-
-    Contract is defined by us — user copies the JSON body template into the
-    form's HTTP-integration settings (see README).
-    """
-
-    foreman: str = Field(..., min_length=1, description="Selected foreman name")
-    file_url: HttpUrl = Field(..., description="Public URL of the uploaded UPD")
-    file_name: str = Field(..., min_length=1, description="Original filename from the form")
-    submitted_at: datetime | None = Field(None, description="Form submission timestamp")
-    form_id: str | None = Field(None, description="Yandex Form id")
+# Foreman names shown in the form select. Keep in sync with app/static/index.html.
+Foreman = Literal["Юра", "Гриша", "Боря"]
 
 
 # Values Claude emits when it can't confidently read a field (see vision SYSTEM prompt).
@@ -57,6 +46,19 @@ class UPDRecord(_Base):
         return any(
             v is None for v in (self.organization, self.date, self.amount, self.upd_number)
         )
+
+    def missing_fields(self) -> list[str]:
+        """Names of fields the model failed to extract."""
+        return [
+            name
+            for name, value in (
+                ("organization", self.organization),
+                ("date", self.date),
+                ("amount", self.amount),
+                ("upd_number", self.upd_number),
+            )
+            if value is None
+        ]
 
     @model_validator(mode="before")
     @classmethod
@@ -96,7 +98,7 @@ class UPDRecord(_Base):
 class DownloadedFile(_Base):
     """Result of files.to_png(): normalised PNG bytes + metadata.
 
-    ``bytes`` is the PNG payload (passthrough for image/*, rasterised page 1
+    ``data`` is the PNG payload (passthrough for image/*, rasterised page 1
     for PDFs). ``page_count`` is None for non-PDF inputs.
     """
 
@@ -104,3 +106,19 @@ class DownloadedFile(_Base):
     media_type: str = Field("image/png")
     original_name: str
     page_count: int | None = None
+
+
+class UploadResult(_Base):
+    """Response DTO returned by ``POST /api/upload``.
+
+    HTTP status is always 200 unless the request itself is malformed (415/413/422).
+    The frontend branches on ``ok`` and ``needs_review`` to render the right banner.
+    """
+
+    ok: bool
+    correlation_id: str
+    record: UPDRecord | None = None
+    sheet_url: str | None = None
+    needs_review: bool = False
+    missing_fields: list[str] | None = None
+    error: str | None = None

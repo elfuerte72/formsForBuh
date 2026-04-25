@@ -5,3 +5,8 @@ __pycache__/
 .claude/
 *.png
 *.pdf
+
+# Service-account / credentials JSON keys must never be committed.
+gen-lang-client-*.json
+*service-account*.json
+*credentials*.json

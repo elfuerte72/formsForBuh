@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Загрузка УПД — Выборг</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #ffffff;
+      --text: #1a1a1a;
+      --muted: #6b7280;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success-bg: #ecfdf5;
+      --success-border: #10b981;
+      --warn-bg: #fffbeb;
+      --warn-border: #f59e0b;
+      --error-bg: #fef2f2;
+      --error-border: #ef4444;
+      --border: #e5e7eb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 480px;
+      background: var(--card);
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+      padding: 32px 28px;
+    }
+
+    h1 {
+      margin: 0 0 4px 0;
+      font-size: 22px;
+      font-weight: 600;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0 0 24px 0;
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+
+    select,
+    input[type="file"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 15px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    select:focus,
+    input[type="file"]:focus {
+      outline: 2px solid var(--primary);
+      outline-offset: -1px;
+      border-color: var(--primary);
+    }
+
+    .field {
+      margin-bottom: 18px;
+    }
+
+    button {
+      width: 100%;
+      padding: 12px 16px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    button:disabled {
+      background: #93c5fd;
+      cursor: not-allowed;
+    }
+
+    .banner {
+      margin-top: 20px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      border-left: 4px solid;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .banner.success {
+      background: var(--success-bg);
+      border-color: var(--success-border);
+      color: #065f46;
+    }
+
+    .banner.warn {
+      background: var(--warn-bg);
+      border-color: var(--warn-border);
+      color: #92400e;
+    }
+
+    .banner.error {
+      background: var(--error-bg);
+      border-color: var(--error-border);
+      color: #991b1b;
+    }
+
+    .banner h3 {
+      margin: 0 0 8px 0;
+      font-size: 15px;
+    }
+
+    .banner ul {
+      margin: 8px 0 0 0;
+      padding-left: 20px;
+    }
+
+    .banner a {
+      color: inherit;
+      font-weight: 600;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      word-break: break-all;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Загрузка УПД</h1>
+    <p class="subtitle">Выберите прораба и приложите файл — система распознает реквизиты и добавит строку в таблицу.</p>
+
+    <form id="upload-form">
+      <div class="field">
+        <label for="foreman">Прораб</label>
+        <select id="foreman" name="foreman" required>
+          <option value="" disabled selected>Выберите…</option>
+          <option value="Юра">Юра</option>
+          <option value="Гриша">Гриша</option>
+          <option value="Боря">Боря</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="file">Файл УПД (PDF или фото)</label>
+        <input type="file" id="file" name="file" accept="application/pdf,image/*" required />
+      </div>
+
+      <button type="submit" id="submit-btn">Отправить</button>
+    </form>
+
+    <div id="result" class="hidden"></div>
+  </main>
+
+  <script>
+    (function () {
+      const form = document.getElementById("upload-form");
+      const btn = document.getElementById("submit-btn");
+      const resultEl = document.getElementById("result");
+
+      const ERROR_MESSAGES = {
+        unsupported_file_type: "Формат файла не поддерживается. Загрузите PDF или изображение.",
+        vision_extraction_error: "Не удалось обработать документ через ИИ. Попробуйте ещё раз через минуту.",
+        sheets_append_error: "Документ распознан, но запись в таблицу не удалась. Сообщите администратору.",
+        app_error: "Внутренняя ошибка приложения.",
+        unexpected_error: "Произошла непредвиденная ошибка."
+      };
+
+      const FIELD_LABELS = {
+        organization: "Организация",
+        date: "Дата",
+        amount: "Сумма",
+        upd_number: "Номер УПД"
+      };
+
+      function escape(value) {
+        const str = String(value ?? "");
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function showResult(html, kind) {
+        resultEl.className = "banner " + kind;
+        resultEl.innerHTML = html;
+        resultEl.classList.remove("hidden");
+      }
+
+      function renderRecord(record) {
+        if (!record) return "";
+        const rows = Object.keys(FIELD_LABELS)
+          .map(key => {
+            const value = record[key];
+            const display = value === null || value === undefined || value === ""
+              ? "<em>—</em>"
+              : escape(value);
+            return `<li><strong>${FIELD_LABELS[key]}:</strong> ${display}</li>`;
+          })
+          .join("");
+        return `<ul>${rows}</ul>`;
+      }
+
+      function renderMissing(missing) {
+        if (!missing || missing.length === 0) return "";
+        const labels = missing.map(k => FIELD_LABELS[k] || k).join(", ");
+        return `<p>Не удалось распознать: <strong>${escape(labels)}</strong></p>`;
+      }
+
+      async function submit(event) {
+        event.preventDefault();
+        resultEl.classList.add("hidden");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span>Обработка…';
+
+        const formData = new FormData(form);
+
+        let response;
+        try {
+          response = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+          });
+        } catch (err) {
+          showResult(
+            `<h3>Не удалось отправить</h3><p>Проверьте подключение к интернету и попробуйте ещё раз.</p>`,
+            "error"
+          );
+          btn.disabled = false;
+          btn.textContent = "Отправить";
+          return;
+        }
+
+        let data = null;
+        try {
+          data = await response.json();
+        } catch (_) { /* fallthrough */ }
+
+        if (!response.ok) {
+          const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
+          showResult(
+            `<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`,
+            "error"
+          );
+          btn.disabled = false;
+          btn.textContent = "Отправить";
+          return;
+        }
+
+        if (data.ok && !data.needs_review) {
+          const link = data.sheet_url
+            ? `<p><a href="${escape(data.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
+            : "";
+          showResult(
+            `<h3>УПД распознан и добавлен в таблицу</h3>${renderRecord(data.record)}${link}`,
+            "success"
+          );
+          form.reset();
+        } else if (data.ok && data.needs_review) {
+          showResult(
+            `<h3>Документ распознан не полностью</h3>` +
+            renderMissing(data.missing_fields) +
+            `<p>Файл сохранён в логах. Проверьте документ вручную и при необходимости добавьте строку в таблицу.</p>` +
+            renderRecord(data.record) +
+            `<p class="meta">correlation_id: ${escape(data.correlation_id)}</p>`,
+            "warn"
+          );
+        } else {
+          const msg = ERROR_MESSAGES[data.error] || data.error || "Неизвестная ошибка.";
+          showResult(
+            `<h3>Не удалось обработать документ</h3><p>${escape(msg)}</p>` +
+            `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`,
+            "error"
+          );
+        }
+
+        btn.disabled = false;
+        btn.textContent = "Отправить";
+      }
+
+      form.addEventListener("submit", submit);
+    })();
+  </script>
+</body>
+</html>

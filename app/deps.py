@@ -1,36 +1,17 @@
-"""FastAPI dependencies: auth + service factories."""
+"""FastAPI dependencies: cached SDK clients + per-request service factories."""
 
 from __future__ import annotations
 
-import secrets
 from functools import lru_cache
 
 import httpx
 from anthropic import AsyncAnthropic
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends
 
 from app.config import Settings, get_settings
 from app.services.files import FilesService
+from app.services.sheets import SheetsService
 from app.services.vision import VisionService
-
-
-# --- Auth -------------------------------------------------------------------
-
-
-async def verify_webhook_secret(
-    x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
-    settings: Settings = Depends(get_settings),
-) -> None:
-    """Timing-safe check of the shared secret.
-
-    Yandex Forms attaches the header configured in the integration UI.
-    """
-    expected = settings.webhook_secret
-    if not x_webhook_secret or not secrets.compare_digest(x_webhook_secret, expected):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-Webhook-Secret",
-        )
 
 
 # --- Singletons (cached) ----------------------------------------------------
@@ -51,6 +32,15 @@ def get_httpx_client() -> httpx.AsyncClient:
     )
 
 
+@lru_cache(maxsize=1)
+def get_sheets_service() -> SheetsService:
+    settings = get_settings()
+    return SheetsService(
+        credentials_json=settings.google_credentials_json,
+        sheet_id=settings.sheet_id,
+    )
+
+
 # --- Service factories ------------------------------------------------------
 
 
@@ -59,7 +49,7 @@ def get_files_service(
 ) -> FilesService:
     return FilesService(
         client=get_httpx_client(),
-        max_bytes=settings.max_download_bytes,
+        max_bytes=settings.max_upload_bytes,
         dpi=settings.max_image_dpi,
     )
 

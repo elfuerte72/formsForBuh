@@ -6,10 +6,10 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# IPv6 is mandatory — Yandex Forms send webhooks only from 2a02:6b8:c00::/40.
-startCommand = "uvicorn app.main:app --host :: --port $PORT"
+# Dockerfile CMD binds 0.0.0.0:${PORT} — Railway's edge handles IPv6 ingress
+# and proxies clients to the container via the private network.
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
 numReplicas = 1

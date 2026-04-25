@@ -9,7 +9,17 @@ import pytest
 
 # Ensure required settings are present before anything imports app.config.
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
-os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
+os.environ.setdefault("SHEET_ID", "test-sheet-id")
+os.environ.setdefault(
+    "GOOGLE_CREDENTIALS_JSON",
+    (
+        '{"type":"service_account","project_id":"test-project",'
+        '"private_key_id":"abc","private_key":"-----BEGIN PRIVATE KEY-----\\n'
+        'fake\\n-----END PRIVATE KEY-----\\n",'
+        '"client_email":"test@test.iam.gserviceaccount.com",'
+        '"client_id":"1","token_uri":"https://oauth2.googleapis.com/token"}'
+    ),
+)
 os.environ.setdefault("LOG_LEVEL", "DEBUG")
 os.environ.setdefault("LOG_FORMAT", "pretty")
 

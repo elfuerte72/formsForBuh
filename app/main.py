@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api import upd_upload
 from app.config import get_settings, redact_settings
@@ -12,6 +14,8 @@ from app.core.logging import configure_logging, get_logger
 from app.deps import get_anthropic_client, get_httpx_client
 
 log = get_logger("main")
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
@@ -39,8 +43,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="formsForBuh — UPD upload webhook",
-    version="0.1.0",
+    title="formsForBuh — UPD upload form",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -50,3 +54,11 @@ app.include_router(upd_upload.router)
 @app.get("/health", tags=["infra"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# Static frontend (mounted last so /api/* routes win the dispatch).
+app.mount(
+    "/",
+    StaticFiles(directory=str(_STATIC_DIR), html=True),
+    name="static",
+)

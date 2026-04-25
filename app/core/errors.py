@@ -19,3 +19,7 @@ class UnsupportedFileTypeError(AppError):
 
 class VisionExtractionError(AppError):
     """Claude Vision call failed or returned a malformed response."""
+
+
+class SheetsAppendError(AppError):
+    """Failure appending a row to the Google Sheet."""
