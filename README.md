@@ -7,6 +7,14 @@ Claude Vision, извлекает четыре поля (`organization`, `date`,
 форма показывает результат: ссылку на таблицу при успехе, предупреждение
 при частичном распознавании или ошибку с `correlation_id` для саппорта.
 
+Вторая вкладка «Сводка» — еженедельная сверка с реестром 1С. Бухгалтер
+выгружает «Реестр документов "Поступление (акт, накладная, УПД)"»
+(`.xls` / `.xlsx` / `.csv`), бэкенд парсит реестр, читает таблицу прорабов
+из того же Google Sheet и возвращает три списка (не загружено прорабами /
+дубликаты в таблице / лишние записи) плюс сводную статистику. Каждый
+непустой список имеет кнопку «Скопировать список» в формате
+`№X от dd.mm.yyyy на 12 345 ₽`.
+
 ## Быстрый старт
 
 ```bash
@@ -57,31 +65,38 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```
 app/
-├── api/upd_upload.py       — POST /api/upload (multipart)
-├── pipelines/upd_upload.py — оркестрация: to_png → vision → sheets
+├── api/
+│   ├── upd_upload.py        — POST /api/upload (multipart)
+│   └── reconciliation.py    — POST /api/reconciliation (multipart)
+├── pipelines/
+│   ├── upd_upload.py        — оркестрация: to_png → vision → sheets
+│   └── reconciliation.py    — onec.parse → sheets.read → diff
 ├── services/
-│   ├── files.py            — PyMuPDF PDF→PNG (httpx остался для будущего)
-│   ├── vision.py           — Claude Vision tool-use
-│   └── sheets.py           — gspread + google-auth (append-only)
+│   ├── files.py             — PyMuPDF PDF→PNG (httpx остался для будущего)
+│   ├── vision.py            — Claude Vision tool-use
+│   ├── sheets.py            — gspread + google-auth (append + read)
+│   └── onec.py              — xlrd / openpyxl / csv — парсер выгрузки 1С
 ├── core/
-│   ├── logging.py          — structlog (JSON / pretty) + correlation-id
-│   └── errors.py           — доменные ошибки
-├── static/index.html       — кастомная HTML-форма (CSS/JS инлайн)
-├── config.py               — pydantic-settings
-├── models.py               — Foreman / UPDRecord / DownloadedFile / UploadResult
-├── deps.py                 — фабрики сервисов
-└── main.py                 — FastAPI + lifespan + StaticFiles
+│   ├── logging.py           — structlog (JSON / pretty) + correlation-id
+│   └── errors.py            — доменные ошибки
+├── static/index.html        — две вкладки: «Загрузка УПД» и «Сводка»
+├── config.py                — pydantic-settings
+├── models.py                — DTO загрузки + DTO сверки (OneCRecord, MissingUPD, …)
+├── deps.py                  — фабрики сервисов
+└── main.py                  — FastAPI + lifespan + StaticFiles
 tests/
-├── unit/                   — сервисы под моками
-├── integration/            — endpoint через httpx ASGITransport
-└── fixtures/upd/           — реальные скриншоты УПД
+├── unit/                    — сервисы и pipeline под моками
+├── integration/             — endpoints через httpx ASGITransport
+└── fixtures/
+    ├── upd/                 — реальные скриншоты УПД
+    └── onec/sample.xls      — реальная выгрузка 1С (для регрессии парсера)
 ```
 
 Подробнее: `.ai-factory/ARCHITECTURE.md`.
 
 ## Эндпоинты
 
-- `GET /` — HTML-форма.
+- `GET /` — HTML-форма с двумя вкладками.
 - `POST /api/upload` — multipart `foreman` (Юра/Гриша/Боря) + `file`
   (PDF / image). Возвращает `UploadResult`:
 
@@ -97,7 +112,33 @@ tests/
   }
   ```
 
+- `POST /api/reconciliation` — multipart `file` (`.xls` / `.xlsx` / `.csv`).
+  Возвращает `ReconciliationResult`:
+
+  ```json
+  {
+    "ok": true,
+    "correlation_id": "abc...",
+    "missing": [{"upd_number": "...", "date": "2026-02-05", "amount": 21324.0, "organization": "...", "source_row": 7}],
+    "duplicates": [{"upd_number": "...", "count": 2, "foremen": ["Юра", "Гриша"], "dates": ["2026-02-05", "2026-02-05"]}],
+    "extras": [{"upd_number": "...", "foreman": "Боря", "date": "2026-04-15"}],
+    "stats": {"onec_total": 45, "foreman_total": 38, "matched": 30, "missing": 15, "duplicates": 1, "extras": 8, "coverage_percent": 66.7},
+    "error": null
+  }
+  ```
+
 - `GET /health` — `{"status":"ok"}`.
+
+### Сверка с 1С
+
+Ожидаемая колоночная структура выгрузки (1С формирует её автоматически):
+
+| `№ п/п` | `Дата` | `Документ` | `Номер` | `Дата вх.` | `Номер вх.` | `Сумма` | `Информация` |
+
+В сравнении используется **`Номер вх.`** (исходный номер УПД от поставщика —
+именно его Claude Vision вытягивает из шапки документа). Внутренний
+номер 1С (`Номер`) игнорируется. Нормализация перед сравнением: lowercase,
+обрезка пробелов, удаление пробелов внутри, обрезка ведущих нулей.
 
 Ошибки валидации запроса (415 / 413 / 422) возвращают стандартный
 FastAPI-ответ. Ошибки распознавания/записи приходят как HTTP 200
@@ -120,6 +161,7 @@ uv run pytest -k upload
 
 ## Что вне scope
 
-- Stage 2 — еженедельная сверка (`app/api/reconciliation.py`,
-  `app/pipelines/reconciliation.py`) — запланировано в `.ai-factory/PLAN.md`.
-- Загрузка оригиналов файлов в Drive: пока только Sheets-строка.
+- Хранение истории сверок (БД/файл).
+- Группировка missing по контрагентам/прорабам — пока показываем плоский список (организация — колонка таблицы).
+- Авто-уведомления прорабам (Telegram/email): план копируется бухгалтером вручную.
+- Загрузка оригиналов файлов в Drive: пока только Sheets-строка (`services/drive.py` запланирован отдельным PR).
