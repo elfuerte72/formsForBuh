@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import upd_upload
+from app.api import reconciliation, upd_upload
 from app.config import get_settings, redact_settings
 from app.core.logging import configure_logging, get_logger
 from app.deps import get_anthropic_client, get_httpx_client
@@ -49,6 +49,7 @@ app = FastAPI(
 )
 
 app.include_router(upd_upload.router)
+app.include_router(reconciliation.router)
 
 
 @app.get("/health", tags=["infra"])

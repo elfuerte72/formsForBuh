@@ -10,6 +10,7 @@ from fastapi import Depends
 
 from app.config import Settings, get_settings
 from app.services.files import FilesService
+from app.services.onec import OneCParserService
 from app.services.sheets import SheetsService
 from app.services.vision import VisionService
 
@@ -61,3 +62,8 @@ def get_vision_service(
         client=get_anthropic_client(),
         model=settings.anthropic_model,
     )
+
+
+def get_onec_parser_service() -> OneCParserService:
+    """Per-request stateless parser for 1С exports."""
+    return OneCParserService()
