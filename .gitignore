@@ -5,6 +5,7 @@ __pycache__/
 .claude/
 *.png
 *.pdf
+.DS_Store
 
 # Service-account / credentials JSON keys must never be committed.
 gen-lang-client-*.json
