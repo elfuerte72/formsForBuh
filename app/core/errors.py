@@ -23,3 +23,11 @@ class VisionExtractionError(AppError):
 
 class SheetsAppendError(AppError):
     """Failure appending a row to the Google Sheet."""
+
+
+class SheetsReadError(AppError):
+    """Failure reading rows from the Google Sheet."""
+
+
+class OneCParseError(AppError):
+    """Failure parsing a 1С export (xls/xlsx/csv)."""

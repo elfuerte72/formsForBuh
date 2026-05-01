@@ -10,7 +10,7 @@ import pytest
 
 import gspread
 
-from app.core.errors import SheetsAppendError
+from app.core.errors import SheetsAppendError, SheetsReadError
 from app.models import UPDRecord
 from app.services import sheets as sheets_module
 from app.services.sheets import COLUMNS, SheetsService
@@ -102,3 +102,60 @@ def test_invalid_credentials_json_raises(monkeypatch):
     )
     with pytest.raises(SheetsAppendError):
         svc.append_row_sync(record, foreman="Юра", correlation_id="cid")
+
+
+def test_read_all_records_happy_path(mock_worksheet):
+    mock_worksheet.get_all_values.return_value = [
+        list(COLUMNS),
+        [
+            'ООО "Тест"',
+            "2026-04-22",
+            "12345.67",
+            "UPD-1",
+            "Юра",
+            "2026-04-22T10:00:00+00:00",
+            "cid-1",
+        ],
+        [
+            "",
+            "2026-04-23",
+            "200",
+            "UPD-2",
+            "Гриша",
+            "",
+            "",
+        ],
+    ]
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    rows = svc.read_all_records_sync()
+
+    assert [r.upd_number for r in rows] == ["UPD-1", "UPD-2"]
+    assert rows[0].organization == 'ООО "Тест"'
+    assert rows[0].date == date(2026, 4, 22)
+    assert rows[0].amount == 12345.67
+    assert rows[0].foreman == "Юра"
+    assert rows[0].source_row == 2
+    assert rows[1].organization is None  # blank cell becomes None
+    assert rows[1].source_row == 3
+
+
+def test_read_all_records_skips_rows_without_upd(mock_worksheet):
+    mock_worksheet.get_all_values.return_value = [
+        list(COLUMNS),
+        ["", "", "", "", "Юра", "", ""],  # no upd_number — skip
+        ["", "2026-04-22", "100", "U-1", "Юра", "", ""],
+    ]
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    rows = svc.read_all_records_sync()
+    assert [r.upd_number for r in rows] == ["U-1"]
+
+
+def test_read_all_records_translates_api_error(mock_worksheet):
+    fake_response = MagicMock()
+    fake_response.status_code = 500
+    fake_response.json.return_value = {"error": {"code": 500, "message": "boom"}}
+    mock_worksheet.get_all_values.side_effect = gspread.exceptions.APIError(fake_response)
+
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    with pytest.raises(SheetsReadError):
+        svc.read_all_records_sync()

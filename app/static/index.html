@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Загрузка УПД — Выборг</title>
+  <title>Бухгалтерия Выборг — УПД и сверка</title>
   <style>
     :root {
       --bg: #f5f6f8;
@@ -19,6 +19,7 @@
       --error-bg: #fef2f2;
       --error-border: #ef4444;
       --border: #e5e7eb;
+      --row-alt: #fafbfc;
     }
 
     * { box-sizing: border-box; }
@@ -37,11 +38,11 @@
 
     .card {
       width: 100%;
-      max-width: 480px;
+      max-width: 640px;
       background: var(--card);
       border-radius: 12px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
-      padding: 32px 28px;
+      padding: 28px 28px 32px;
     }
 
     h1 {
@@ -53,7 +54,38 @@
     .subtitle {
       color: var(--muted);
       font-size: 14px;
-      margin: 0 0 24px 0;
+      margin: 0 0 20px 0;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .tab-button {
+      flex: 1;
+      padding: 10px 12px;
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .tab-button:hover {
+      color: var(--text);
+      background: transparent;
+    }
+
+    .tab-button.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
     }
 
     label {
@@ -176,45 +208,195 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    /* --- Reconciliation summary view --- */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      text-align: center;
+    }
+
+    .stat-card .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+
+    .stat-card .stat-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .stat-card.warn .stat-value { color: #b45309; }
+    .stat-card.error .stat-value { color: #b91c1c; }
+    .stat-card.success .stat-value { color: #047857; }
+
+    .section-list {
+      margin-top: 20px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .section-list-header {
+      padding: 10px 14px;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .section-list-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .section-list-header .count-badge {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .copy-btn {
+      width: auto;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 6px;
+      background: var(--primary);
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .copy-btn.copied {
+      background: var(--success-border);
+    }
+
+    table.diff-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    table.diff-table th,
+    table.diff-table td {
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    table.diff-table th {
+      background: #fafbfc;
+      font-weight: 500;
+      color: var(--muted);
+    }
+
+    table.diff-table tr:nth-child(even) td {
+      background: var(--row-alt);
+    }
+
+    table.diff-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    table.diff-table .num {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .empty-list {
+      padding: 12px 14px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 540px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      table.diff-table th,
+      table.diff-table td { padding: 6px 8px; font-size: 12px; }
+    }
   </style>
 </head>
 <body>
   <main class="card">
-    <h1>Загрузка УПД</h1>
-    <p class="subtitle">Выберите прораба и приложите файл — система распознает реквизиты и добавит строку в таблицу.</p>
+    <h1>Бухгалтерия Выборг</h1>
+    <p class="subtitle">Загрузка УПД и сверка с реестром 1С.</p>
 
-    <form id="upload-form">
-      <div class="field">
-        <label for="foreman">Прораб</label>
-        <select id="foreman" name="foreman" required>
-          <option value="" disabled selected>Выберите…</option>
-          <option value="Юра">Юра</option>
-          <option value="Гриша">Гриша</option>
-          <option value="Боря">Боря</option>
-        </select>
-      </div>
+    <div class="tabs" role="tablist">
+      <button class="tab-button active" data-tab="upload" type="button" role="tab">Загрузка УПД</button>
+      <button class="tab-button" data-tab="reconciliation" type="button" role="tab">Сводка</button>
+    </div>
 
-      <div class="field">
-        <label for="file">Файл УПД (PDF или фото)</label>
-        <input type="file" id="file" name="file" accept="application/pdf,image/*" required />
-      </div>
+    <!-- ============================================================== -->
+    <!-- TAB: UPLOAD                                                    -->
+    <!-- ============================================================== -->
+    <section id="tab-upload" role="tabpanel">
+      <form id="upload-form">
+        <div class="field">
+          <label for="foreman">Прораб</label>
+          <select id="foreman" name="foreman" required>
+            <option value="" disabled selected>Выберите…</option>
+            <option value="Юра">Юра</option>
+            <option value="Гриша">Гриша</option>
+            <option value="Боря">Боря</option>
+          </select>
+        </div>
 
-      <button type="submit" id="submit-btn">Отправить</button>
-    </form>
+        <div class="field">
+          <label for="file">Файл УПД (PDF или фото)</label>
+          <input type="file" id="file" name="file" accept="application/pdf,image/*" required />
+        </div>
 
-    <div id="result" class="hidden"></div>
+        <button type="submit" id="submit-btn">Отправить</button>
+      </form>
+
+      <div id="result" class="hidden"></div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- TAB: RECONCILIATION                                            -->
+    <!-- ============================================================== -->
+    <section id="tab-reconciliation" class="hidden" role="tabpanel">
+      <form id="reconciliation-form">
+        <div class="field">
+          <label for="reconciliation-file">Реестр 1С (.xls / .xlsx / .csv)</label>
+          <input type="file" id="reconciliation-file" name="file"
+                 accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                 required />
+        </div>
+        <button type="submit" id="reconciliation-btn">Сравнить</button>
+      </form>
+
+      <div id="reconciliation-result" class="hidden"></div>
+    </section>
   </main>
 
   <script>
     (function () {
-      const form = document.getElementById("upload-form");
-      const btn = document.getElementById("submit-btn");
-      const resultEl = document.getElementById("result");
-
+      // ----- shared helpers -----
       const ERROR_MESSAGES = {
         unsupported_file_type: "Формат файла не поддерживается. Загрузите PDF или изображение.",
         vision_extraction_error: "Не удалось обработать документ через ИИ. Попробуйте ещё раз через минуту.",
         sheets_append_error: "Документ распознан, но запись в таблицу не удалась. Сообщите администратору.",
+        onec_parse_error: "Не удалось разобрать выгрузку 1С. Проверьте формат файла (.xls / .xlsx / .csv) и колонки «Номер вх.», «Дата (вх.)», «Сумма».",
+        sheets_read_error: "Не удалось прочитать таблицу прорабов. Сообщите администратору.",
         app_error: "Внутренняя ошибка приложения.",
         unexpected_error: "Произошла непредвиденная ошибка."
       };
@@ -236,104 +418,386 @@
           .replace(/'/g, "&#39;");
       }
 
-      function showResult(html, kind) {
-        resultEl.className = "banner " + kind;
-        resultEl.innerHTML = html;
-        resultEl.classList.remove("hidden");
+      function formatAmount(value) {
+        if (value === null || value === undefined || value === "") return "—";
+        const n = Number(value);
+        if (!isFinite(n)) return escape(value);
+        return n.toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " ₽";
       }
 
-      function renderRecord(record) {
-        if (!record) return "";
-        const rows = Object.keys(FIELD_LABELS)
-          .map(key => {
-            const value = record[key];
-            const display = value === null || value === undefined || value === ""
-              ? "<em>—</em>"
-              : escape(value);
-            return `<li><strong>${FIELD_LABELS[key]}:</strong> ${display}</li>`;
-          })
-          .join("");
-        return `<ul>${rows}</ul>`;
+      function formatDate(value) {
+        if (!value) return "—";
+        const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!m) return escape(value);
+        return `${m[3]}.${m[2]}.${m[1]}`;
       }
 
-      function renderMissing(missing) {
-        if (!missing || missing.length === 0) return "";
-        const labels = missing.map(k => FIELD_LABELS[k] || k).join(", ");
-        return `<p>Не удалось распознать: <strong>${escape(labels)}</strong></p>`;
-      }
-
-      async function submit(event) {
-        event.preventDefault();
-        resultEl.classList.add("hidden");
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span>Обработка…';
-
-        const formData = new FormData(form);
-
-        let response;
-        try {
-          response = await fetch("/api/upload", {
-            method: "POST",
-            body: formData
-          });
-        } catch (err) {
-          showResult(
-            `<h3>Не удалось отправить</h3><p>Проверьте подключение к интернету и попробуйте ещё раз.</p>`,
-            "error"
-          );
-          btn.disabled = false;
-          btn.textContent = "Отправить";
-          return;
-        }
-
-        let data = null;
-        try {
-          data = await response.json();
-        } catch (_) { /* fallthrough */ }
-
-        if (!response.ok) {
-          const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
-          showResult(
-            `<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`,
-            "error"
-          );
-          btn.disabled = false;
-          btn.textContent = "Отправить";
-          return;
-        }
-
-        if (data.ok && !data.needs_review) {
-          const link = data.sheet_url
-            ? `<p><a href="${escape(data.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
-            : "";
-          showResult(
-            `<h3>УПД распознан и добавлен в таблицу</h3>${renderRecord(data.record)}${link}`,
-            "success"
-          );
-          form.reset();
-        } else if (data.ok && data.needs_review) {
-          showResult(
-            `<h3>Документ распознан не полностью</h3>` +
-            renderMissing(data.missing_fields) +
-            `<p>Файл сохранён в логах. Проверьте документ вручную и при необходимости добавьте строку в таблицу.</p>` +
-            renderRecord(data.record) +
-            `<p class="meta">correlation_id: ${escape(data.correlation_id)}</p>`,
-            "warn"
-          );
+      function copyToClipboard(text, button) {
+        const onSuccess = () => {
+          const original = button.dataset.original || button.textContent;
+          button.dataset.original = original;
+          button.textContent = "Скопировано";
+          button.classList.add("copied");
+          setTimeout(() => {
+            button.textContent = original;
+            button.classList.remove("copied");
+          }, 1500);
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(onSuccess, () => fallbackCopy(text, onSuccess));
         } else {
-          const msg = ERROR_MESSAGES[data.error] || data.error || "Неизвестная ошибка.";
-          showResult(
-            `<h3>Не удалось обработать документ</h3><p>${escape(msg)}</p>` +
-            `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`,
-            "error"
+          fallbackCopy(text, onSuccess);
+        }
+      }
+
+      function fallbackCopy(text, onSuccess) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+          document.execCommand("copy");
+          onSuccess();
+        } catch (_) {
+          alert("Не удалось скопировать. Скопируйте вручную:\n\n" + text);
+        } finally {
+          document.body.removeChild(ta);
+        }
+      }
+
+      // ----- tabs -----
+      const tabButtons = document.querySelectorAll(".tab-button");
+      const panels = {
+        upload: document.getElementById("tab-upload"),
+        reconciliation: document.getElementById("tab-reconciliation")
+      };
+      tabButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          const tab = btn.dataset.tab;
+          tabButtons.forEach(b => b.classList.toggle("active", b === btn));
+          Object.entries(panels).forEach(([name, el]) => {
+            el.classList.toggle("hidden", name !== tab);
+          });
+        });
+      });
+
+      // ============================================================
+      // UPLOAD form
+      // ============================================================
+      (function initUpload() {
+        const form = document.getElementById("upload-form");
+        const btn = document.getElementById("submit-btn");
+        const resultEl = document.getElementById("result");
+
+        function showResult(html, kind) {
+          resultEl.className = "banner " + kind;
+          resultEl.innerHTML = html;
+          resultEl.classList.remove("hidden");
+        }
+
+        function renderRecord(record) {
+          if (!record) return "";
+          const rows = Object.keys(FIELD_LABELS)
+            .map(key => {
+              const value = record[key];
+              const display = value === null || value === undefined || value === ""
+                ? "<em>—</em>"
+                : escape(value);
+              return `<li><strong>${FIELD_LABELS[key]}:</strong> ${display}</li>`;
+            })
+            .join("");
+          return `<ul>${rows}</ul>`;
+        }
+
+        function renderMissing(missing) {
+          if (!missing || missing.length === 0) return "";
+          const labels = missing.map(k => FIELD_LABELS[k] || k).join(", ");
+          return `<p>Не удалось распознать: <strong>${escape(labels)}</strong></p>`;
+        }
+
+        async function submit(event) {
+          event.preventDefault();
+          resultEl.classList.add("hidden");
+          btn.disabled = true;
+          btn.innerHTML = '<span class="spinner"></span>Обработка…';
+
+          const formData = new FormData(form);
+
+          let response;
+          try {
+            response = await fetch("/api/upload", {
+              method: "POST",
+              body: formData
+            });
+          } catch (err) {
+            showResult(
+              `<h3>Не удалось отправить</h3><p>Проверьте подключение к интернету и попробуйте ещё раз.</p>`,
+              "error"
+            );
+            btn.disabled = false;
+            btn.textContent = "Отправить";
+            return;
+          }
+
+          let data = null;
+          try {
+            data = await response.json();
+          } catch (_) { /* fallthrough */ }
+
+          if (!response.ok) {
+            const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
+            showResult(
+              `<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`,
+              "error"
+            );
+            btn.disabled = false;
+            btn.textContent = "Отправить";
+            return;
+          }
+
+          if (data.ok && !data.needs_review) {
+            const link = data.sheet_url
+              ? `<p><a href="${escape(data.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
+              : "";
+            showResult(
+              `<h3>УПД распознан и добавлен в таблицу</h3>${renderRecord(data.record)}${link}`,
+              "success"
+            );
+            form.reset();
+          } else if (data.ok && data.needs_review) {
+            showResult(
+              `<h3>Документ распознан не полностью</h3>` +
+              renderMissing(data.missing_fields) +
+              `<p>Файл сохранён в логах. Проверьте документ вручную и при необходимости добавьте строку в таблицу.</p>` +
+              renderRecord(data.record) +
+              `<p class="meta">correlation_id: ${escape(data.correlation_id)}</p>`,
+              "warn"
+            );
+          } else {
+            const msg = ERROR_MESSAGES[data.error] || data.error || "Неизвестная ошибка.";
+            showResult(
+              `<h3>Не удалось обработать документ</h3><p>${escape(msg)}</p>` +
+              `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`,
+              "error"
+            );
+          }
+
+          btn.disabled = false;
+          btn.textContent = "Отправить";
+        }
+
+        form.addEventListener("submit", submit);
+      })();
+
+      // ============================================================
+      // RECONCILIATION form
+      // ============================================================
+      (function initReconciliation() {
+        const form = document.getElementById("reconciliation-form");
+        const btn = document.getElementById("reconciliation-btn");
+        const resultEl = document.getElementById("reconciliation-result");
+
+        function showBanner(html, kind) {
+          resultEl.className = "banner " + kind;
+          resultEl.innerHTML = html;
+          resultEl.classList.remove("hidden");
+        }
+
+        function showSummary(html) {
+          resultEl.className = "";
+          resultEl.innerHTML = html;
+          resultEl.classList.remove("hidden");
+        }
+
+        function statCard(label, value, kind) {
+          return `<div class="stat-card${kind ? " " + kind : ""}"><div class="stat-label">${escape(label)}</div><div class="stat-value">${escape(value)}</div></div>`;
+        }
+
+        function renderStats(stats) {
+          if (!stats) return "";
+          const matchedKind = stats.coverage_percent === 100 ? "success" : (stats.missing > 0 ? "warn" : "");
+          return (
+            `<div class="stats-grid">` +
+            statCard("В 1С", stats.onec_total, "") +
+            statCard("В таблице", stats.foreman_total, "") +
+            statCard("Совпало", stats.matched + " / " + stats.onec_total, matchedKind) +
+            statCard("Покрытие", stats.coverage_percent.toFixed(1) + "%", matchedKind) +
+            `</div>`
           );
         }
 
-        btn.disabled = false;
-        btn.textContent = "Отправить";
-      }
+        function buildCopyText(items, builder) {
+          return items.map(builder).join("\n");
+        }
 
-      form.addEventListener("submit", submit);
+        function renderMissingSection(missing) {
+          const count = missing.length;
+          const heading = `Не загружено прорабами`;
+          if (count === 0) {
+            return sectionWrap(heading, 0, null, `<div class="empty-list">Все УПД из 1С присутствуют в таблице.</div>`);
+          }
+          const copyText = buildCopyText(missing, m => `№${m.upd_number} от ${formatDate(m.date)} на ${formatAmount(m.amount).replace(" ₽", "")} ₽`);
+          const rows = missing.map(m => (
+            `<tr>` +
+            `<td>${escape(m.upd_number)}</td>` +
+            `<td class="num">${escape(formatDate(m.date))}</td>` +
+            `<td class="num">${escape(formatAmount(m.amount))}</td>` +
+            `<td>${escape(m.organization || "—")}</td>` +
+            `</tr>`
+          )).join("");
+          const tableHtml = (
+            `<table class="diff-table">` +
+            `<thead><tr><th>Номер</th><th>Дата</th><th>Сумма</th><th>Контрагент</th></tr></thead>` +
+            `<tbody>${rows}</tbody></table>`
+          );
+          return sectionWrap(heading, count, copyText, tableHtml);
+        }
+
+        function renderDuplicatesSection(duplicates) {
+          const count = duplicates.length;
+          const heading = `Дубликаты в таблице прорабов`;
+          if (count === 0) {
+            return sectionWrap(heading, 0, null, `<div class="empty-list">Дубликатов нет.</div>`);
+          }
+          const copyText = buildCopyText(duplicates, d => `№${d.upd_number} — ${d.count}× (${(d.foremen || []).join(", ") || "—"})`);
+          const rows = duplicates.map(d => (
+            `<tr>` +
+            `<td>${escape(d.upd_number)}</td>` +
+            `<td class="num">${escape(d.count)}</td>` +
+            `<td>${escape((d.foremen || []).join(", ") || "—")}</td>` +
+            `<td>${escape((d.dates || []).map(formatDate).join(", ") || "—")}</td>` +
+            `</tr>`
+          )).join("");
+          const tableHtml = (
+            `<table class="diff-table">` +
+            `<thead><tr><th>Номер</th><th>Раз</th><th>Прорабы</th><th>Даты</th></tr></thead>` +
+            `<tbody>${rows}</tbody></table>`
+          );
+          return sectionWrap(heading, count, copyText, tableHtml);
+        }
+
+        function renderExtrasSection(extras) {
+          const count = extras.length;
+          const heading = `Лишние в таблице (нет в 1С)`;
+          if (count === 0) {
+            return sectionWrap(heading, 0, null, `<div class="empty-list">Лишних УПД нет.</div>`);
+          }
+          const copyText = buildCopyText(extras, e => `№${e.upd_number} от ${formatDate(e.date)} (${e.foreman || "—"})`);
+          const rows = extras.map(e => (
+            `<tr>` +
+            `<td>${escape(e.upd_number)}</td>` +
+            `<td>${escape(e.foreman || "—")}</td>` +
+            `<td class="num">${escape(formatDate(e.date))}</td>` +
+            `</tr>`
+          )).join("");
+          const tableHtml = (
+            `<table class="diff-table">` +
+            `<thead><tr><th>Номер</th><th>Прораб</th><th>Дата</th></tr></thead>` +
+            `<tbody>${rows}</tbody></table>`
+          );
+          return sectionWrap(heading, count, copyText, tableHtml);
+        }
+
+        function sectionWrap(heading, count, copyText, bodyHtml) {
+          const copyBtn = copyText
+            ? `<button type="button" class="copy-btn" data-copy="${escape(copyText)}">Скопировать список</button>`
+            : "";
+          return (
+            `<div class="section-list">` +
+            `<div class="section-list-header">` +
+            `<h3>${escape(heading)} <span class="count-badge">(${count})</span></h3>` +
+            copyBtn +
+            `</div>` +
+            bodyHtml +
+            `</div>`
+          );
+        }
+
+        function attachCopyHandlers(rootEl) {
+          rootEl.querySelectorAll(".copy-btn[data-copy]").forEach(btn => {
+            btn.addEventListener("click", () => {
+              copyToClipboard(btn.dataset.copy, btn);
+            });
+          });
+        }
+
+        async function submit(event) {
+          event.preventDefault();
+          resultEl.classList.add("hidden");
+          btn.disabled = true;
+          btn.innerHTML = '<span class="spinner"></span>Сравниваем…';
+
+          const formData = new FormData(form);
+
+          let response;
+          try {
+            response = await fetch("/api/reconciliation", {
+              method: "POST",
+              body: formData
+            });
+          } catch (err) {
+            showBanner(
+              `<h3>Не удалось отправить</h3><p>Проверьте подключение к интернету и попробуйте ещё раз.</p>`,
+              "error"
+            );
+            btn.disabled = false;
+            btn.textContent = "Сравнить";
+            return;
+          }
+
+          let data = null;
+          try {
+            data = await response.json();
+          } catch (_) { /* fallthrough */ }
+
+          if (!response.ok) {
+            const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
+            showBanner(
+              `<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`,
+              "error"
+            );
+            btn.disabled = false;
+            btn.textContent = "Сравнить";
+            return;
+          }
+
+          if (!data.ok) {
+            const msg = ERROR_MESSAGES[data.error] || data.error || "Неизвестная ошибка.";
+            showBanner(
+              `<h3>Не удалось выполнить сверку</h3><p>${escape(msg)}</p>` +
+              `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`,
+              "error"
+            );
+            btn.disabled = false;
+            btn.textContent = "Сравнить";
+            return;
+          }
+
+          const missing = data.missing || [];
+          const duplicates = data.duplicates || [];
+          const extras = data.extras || [];
+
+          let html = "";
+          if (missing.length === 0 && duplicates.length === 0 && extras.length === 0) {
+            html += `<div class="banner success" style="margin-top:0;"><h3>Все УПД на месте</h3><p>Расхождений между 1С и таблицей прорабов нет.</p></div>`;
+          }
+          html += renderStats(data.stats);
+          html += renderMissingSection(missing);
+          html += renderDuplicatesSection(duplicates);
+          html += renderExtrasSection(extras);
+          html += `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`;
+
+          showSummary(html);
+          attachCopyHandlers(resultEl);
+          btn.disabled = false;
+          btn.textContent = "Сравнить";
+        }
+
+        form.addEventListener("submit", submit);
+      })();
     })();
   </script>
 </body>

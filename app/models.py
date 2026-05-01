@@ -122,3 +122,89 @@ class UploadResult(_Base):
     needs_review: bool = False
     missing_fields: list[str] | None = None
     error: str | None = None
+
+
+# --- Stage 2: reconciliation ------------------------------------------------
+
+
+class OneCRecord(_Base):
+    """One row parsed from a 1С export (xls/xlsx/csv).
+
+    ``upd_number`` is the *incoming* document number (column «Номер вх.» in
+    1С) — the same value Claude Vision extracts from the УПД header. The
+    internal 1С document number is intentionally ignored.
+    """
+
+    upd_number: str = Field(description="Incoming UPD number from supplier (raw)")
+    date: Date | None = Field(None, description="Document date (Дата or Дата вх.)")
+    amount: float | None = Field(None, ge=0, description="Total amount with VAT")
+    organization: str | None = Field(None, description="Counterparty name (column «Информация»)")
+    source_row: int = Field(description="Original 1-based row index in the spreadsheet")
+
+
+class SheetUPDRow(_Base):
+    """One row read from the foreman's Google Sheet."""
+
+    upd_number: str = Field(description="UPD number as written by Claude Vision")
+    organization: str | None = None
+    date: Date | None = None
+    amount: float | None = Field(None, ge=0)
+    foreman: str | None = None
+    uploaded_at: str | None = None
+    correlation_id: str | None = None
+    source_row: int = Field(description="1-based row index inside the spreadsheet")
+
+
+class MissingUPD(_Base):
+    """A UPD listed in 1С but never uploaded by foremen."""
+
+    upd_number: str
+    date: Date | None = None
+    amount: float | None = None
+    organization: str | None = None
+    source_row: int
+
+
+class DuplicateUPD(_Base):
+    """A UPD uploaded more than once into the foreman sheet."""
+
+    upd_number: str
+    count: int = Field(ge=2)
+    foremen: list[str] = Field(default_factory=list)
+    dates: list[Date] = Field(default_factory=list)
+
+
+class ExtraUPD(_Base):
+    """A UPD uploaded by a foreman that has no match in the 1С export."""
+
+    upd_number: str
+    foreman: str | None = None
+    date: Date | None = None
+
+
+class ReconciliationStats(_Base):
+    """High-level counts shown above the three lists."""
+
+    onec_total: int = Field(ge=0)
+    foreman_total: int = Field(ge=0)
+    matched: int = Field(ge=0)
+    missing: int = Field(ge=0)
+    duplicates: int = Field(ge=0)
+    extras: int = Field(ge=0)
+    coverage_percent: float = Field(ge=0, le=100)
+
+
+class ReconciliationResult(_Base):
+    """Response DTO returned by ``POST /api/reconciliation``.
+
+    Mirrors :class:`UploadResult`: HTTP 200 unless the request is malformed;
+    pipeline errors land here as ``ok=False`` with a stable ``error`` code.
+    """
+
+    ok: bool
+    correlation_id: str
+    missing: list[MissingUPD] = Field(default_factory=list)
+    duplicates: list[DuplicateUPD] = Field(default_factory=list)
+    extras: list[ExtraUPD] = Field(default_factory=list)
+    stats: ReconciliationStats | None = None
+    error: str | None = None

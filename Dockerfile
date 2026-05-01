@@ -12,9 +12,9 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 
 # Cache-friendly: deps layer invalidates only when lock files change.
+# (No BuildKit cache-mount — Railway builder rejects generic cache ids.)
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 # ---------- runtime: minimal image with only venv + source ----------
 FROM python:3.12-slim AS runtime
