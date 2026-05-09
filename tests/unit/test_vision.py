@@ -43,7 +43,8 @@ async def test_extract_sends_tool_use_request() -> None:
     create = AsyncMock(
         return_value=_fake_response(
             {
-                "organization": 'ООО "Озеленский"',
+                "organization": "Гринлайн",
+                "counterparty": 'ООО "Озеленский"',
                 "date": "2026-04-22",
                 "amount": 12345.67,
                 "upd_number": "6022635717",
@@ -54,6 +55,8 @@ async def test_extract_sends_tool_use_request() -> None:
     rec = await svc.extract(b"PNGBYTES", media_type="image/png")
 
     assert rec.upd_number == "6022635717"
+    assert rec.organization == "Гринлайн"
+    assert rec.counterparty == 'ООО "Озеленский"'
     assert rec.amount == pytest.approx(12345.67)
 
     kwargs = create.call_args.kwargs
@@ -72,7 +75,8 @@ async def test_extract_parses_record() -> None:
     create = AsyncMock(
         return_value=_fake_response(
             {
-                "organization": "ИП Петров И.И.",
+                "organization": "Исмаилов",
+                "counterparty": "ИП Петров И.И.",
                 "date": "2026-01-03",
                 "amount": 42.5,
                 "upd_number": "A-1/2026",
@@ -81,7 +85,8 @@ async def test_extract_parses_record() -> None:
     )
     svc = _make_service(create)
     rec = await svc.extract(b"PNG", media_type="image/png")
-    assert rec.organization == "ИП Петров И.И."
+    assert rec.organization == "Исмаилов"
+    assert rec.counterparty == "ИП Петров И.И."
     assert rec.date.isoformat() == "2026-01-03"
     assert rec.upd_number == "A-1/2026"
 
@@ -100,7 +105,8 @@ async def test_extract_unknown_amount_yields_needs_review() -> None:
     create = AsyncMock(
         return_value=_fake_response(
             {
-                "organization": 'ООО "Строительный Двор"',
+                "organization": "Гринлайн",
+                "counterparty": 'ООО "Строительный Двор"',
                 "date": "2026-04-15",
                 "amount": "<UNKNOWN>",
                 "upd_number": "0084537945/2116132546",
@@ -110,7 +116,8 @@ async def test_extract_unknown_amount_yields_needs_review() -> None:
     svc = _make_service(create)
     rec = await svc.extract(b"PNG")
     assert rec.amount is None
-    assert rec.organization == 'ООО "Строительный Двор"'
+    assert rec.organization == "Гринлайн"
+    assert rec.counterparty == 'ООО "Строительный Двор"'
     assert rec.upd_number == "0084537945/2116132546"
     assert rec.needs_review is True
 
@@ -121,7 +128,8 @@ async def test_extract_russian_decimal_amount_string() -> None:
     create = AsyncMock(
         return_value=_fake_response(
             {
-                "organization": "ИП Петров И.И.",
+                "organization": "Гринлайн",
+                "counterparty": "ИП Петров И.И.",
                 "date": "2026-01-03",
                 "amount": "12 345,67",
                 "upd_number": "A-1/2026",
@@ -141,6 +149,7 @@ async def test_extract_all_unknown_all_nullable() -> None:
         return_value=_fake_response(
             {
                 "organization": "<UNKNOWN>",
+                "counterparty": "<UNKNOWN>",
                 "date": "<UNKNOWN>",
                 "amount": "<UNKNOWN>",
                 "upd_number": "<UNKNOWN>",
@@ -150,6 +159,7 @@ async def test_extract_all_unknown_all_nullable() -> None:
     svc = _make_service(create)
     rec = await svc.extract(b"PNG")
     assert rec.organization is None
+    assert rec.counterparty is None
     assert rec.date is None
     assert rec.amount is None
     assert rec.upd_number is None
@@ -165,7 +175,8 @@ async def test_extract_retries_on_connection_error(monkeypatch: pytest.MonkeyPat
 
     ok_response = _fake_response(
         {
-            "organization": "ООО Ромашка",
+            "organization": "Гринлайн",
+            "counterparty": "ООО Ромашка",
             "date": "2026-02-01",
             "amount": 100.0,
             "upd_number": "R-7",

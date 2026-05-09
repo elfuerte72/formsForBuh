@@ -21,14 +21,16 @@ from app.models import SheetUPDRow, UPDRecord
 log = get_logger("sheets")
 
 # Order of columns the service writes — keep the spreadsheet header row in sync.
+# «Статус» is left blank by the service and filled in manually by the bookkeeper.
 COLUMNS: tuple[str, ...] = (
     "Организация",
+    "Контрагент",
     "Дата",
     "Сумма",
     "Номер УПД",
     "Прораб",
-    "Загружено",
-    "correlation_id",
+    "Дата загрузки",
+    "Статус",
 )
 
 _SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
@@ -78,12 +80,13 @@ class SheetsService:
         worksheet = self._get_worksheet()
         values = [
             record.organization or "",
+            record.counterparty or "",
             record.date.isoformat() if record.date else "",
             record.amount if record.amount is not None else "",
             record.upd_number or "",
             foreman,
             datetime.now(UTC).isoformat(timespec="seconds"),
-            correlation_id,
+            "",  # «Статус» — bookkeeper fills it in by hand
         ]
         try:
             worksheet.append_row(values, value_input_option="USER_ENTERED")
@@ -173,18 +176,19 @@ def _row_to_sheet_upd(values: list[str], *, source_row: int) -> SheetUPDRow | No
     def _at(idx: int) -> str:
         return values[idx].strip() if idx < len(values) and values[idx] else ""
 
-    upd_number = _at(3)
+    upd_number = _at(4)
     if not upd_number:
         return None
 
     return SheetUPDRow(
         organization=_at(0) or None,
-        date=_parse_iso_date(_at(1)),
-        amount=_parse_amount(_at(2)),
+        counterparty=_at(1) or None,
+        date=_parse_iso_date(_at(2)),
+        amount=_parse_amount(_at(3)),
         upd_number=upd_number,
-        foreman=_at(4) or None,
-        uploaded_at=_at(5) or None,
-        correlation_id=_at(6) or None,
+        foreman=_at(5) or None,
+        uploaded_at=_at(6) or None,
+        status=_at(7) or None,
         source_row=source_row,
     )
 

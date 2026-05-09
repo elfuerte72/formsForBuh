@@ -49,7 +49,8 @@ def mock_worksheet(monkeypatch):
 def test_append_row_uses_correct_column_order(mock_worksheet):
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
     record = UPDRecord(
-        organization='ООО "Тест"',
+        organization="Гринлайн",
+        counterparty='ООО "Тест"',
         date=date(2026, 4, 22),
         amount=12345.67,
         upd_number="UPD-1",
@@ -60,19 +61,26 @@ def test_append_row_uses_correct_column_order(mock_worksheet):
     args, kwargs = mock_worksheet.append_row.call_args
     values = args[0]
     assert len(values) == len(COLUMNS)
-    assert values[0] == 'ООО "Тест"'
-    assert values[1] == "2026-04-22"
-    assert values[2] == 12345.67
-    assert values[3] == "UPD-1"
-    assert values[4] == "Юра"
-    assert isinstance(values[5], str) and "T" in values[5]  # ISO timestamp
-    assert values[6] == "cid-abc"
+    assert values[0] == "Гринлайн"
+    assert values[1] == 'ООО "Тест"'
+    assert values[2] == "2026-04-22"
+    assert values[3] == 12345.67
+    assert values[4] == "UPD-1"
+    assert values[5] == "Юра"
+    assert isinstance(values[6], str) and "T" in values[6]  # ISO timestamp
+    assert values[7] == ""  # «Статус» filled by hand
     assert kwargs["value_input_option"] == "USER_ENTERED"
 
 
 def test_append_row_handles_missing_fields(mock_worksheet):
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
-    record = UPDRecord(organization=None, date=None, amount=None, upd_number=None)
+    record = UPDRecord(
+        organization=None,
+        counterparty=None,
+        date=None,
+        amount=None,
+        upd_number=None,
+    )
     svc.append_row_sync(record, foreman="Боря", correlation_id="cid")
 
     values = mock_worksheet.append_row.call_args.args[0]
@@ -80,6 +88,7 @@ def test_append_row_handles_missing_fields(mock_worksheet):
     assert values[1] == ""
     assert values[2] == ""
     assert values[3] == ""
+    assert values[4] == ""
 
 
 def test_append_row_translates_api_error(mock_worksheet):
@@ -108,15 +117,17 @@ def test_read_all_records_happy_path(mock_worksheet):
     mock_worksheet.get_all_values.return_value = [
         list(COLUMNS),
         [
+            "Гринлайн",
             'ООО "Тест"',
             "2026-04-22",
             "12345.67",
             "UPD-1",
             "Юра",
             "2026-04-22T10:00:00+00:00",
-            "cid-1",
+            "Принят оригинал",
         ],
         [
+            "",
             "",
             "2026-04-23",
             "200",
@@ -130,20 +141,24 @@ def test_read_all_records_happy_path(mock_worksheet):
     rows = svc.read_all_records_sync()
 
     assert [r.upd_number for r in rows] == ["UPD-1", "UPD-2"]
-    assert rows[0].organization == 'ООО "Тест"'
+    assert rows[0].organization == "Гринлайн"
+    assert rows[0].counterparty == 'ООО "Тест"'
     assert rows[0].date == date(2026, 4, 22)
     assert rows[0].amount == 12345.67
     assert rows[0].foreman == "Юра"
+    assert rows[0].status == "Принят оригинал"
     assert rows[0].source_row == 2
     assert rows[1].organization is None  # blank cell becomes None
+    assert rows[1].counterparty is None
+    assert rows[1].status is None
     assert rows[1].source_row == 3
 
 
 def test_read_all_records_skips_rows_without_upd(mock_worksheet):
     mock_worksheet.get_all_values.return_value = [
         list(COLUMNS),
-        ["", "", "", "", "Юра", "", ""],  # no upd_number — skip
-        ["", "2026-04-22", "100", "U-1", "Юра", "", ""],
+        ["", "", "", "", "", "Юра", "", ""],  # no upd_number — skip
+        ["", "", "2026-04-22", "100", "U-1", "Юра", "", ""],
     ]
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
     rows = svc.read_all_records_sync()

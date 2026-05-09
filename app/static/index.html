@@ -403,6 +403,7 @@
 
       const FIELD_LABELS = {
         organization: "Организация",
+        counterparty: "Контрагент",
         date: "Дата",
         amount: "Сумма",
         upd_number: "Номер УПД"
@@ -489,13 +490,28 @@
       // ============================================================
       (function initUpload() {
         const form = document.getElementById("upload-form");
+        const fileInput = document.getElementById("file");
         const btn = document.getElementById("submit-btn");
         const resultEl = document.getElementById("result");
+
+        // Blob URL for the just-uploaded file so the bookkeeper can review what
+        // they sent. Revoked on each new submission to avoid memory leaks.
+        let lastFileUrl = null;
 
         function showResult(html, kind) {
           resultEl.className = "banner " + kind;
           resultEl.innerHTML = html;
           resultEl.classList.remove("hidden");
+        }
+
+        function renderFileLink(file) {
+          if (!file) return "";
+          if (lastFileUrl) URL.revokeObjectURL(lastFileUrl);
+          lastFileUrl = URL.createObjectURL(file);
+          return (
+            `<p><a href="${escape(lastFileUrl)}" target="_blank" rel="noopener">` +
+            `Посмотреть отправленный файл (${escape(file.name)}) →</a></p>`
+          );
         }
 
         function renderRecord(record) {
@@ -525,6 +541,8 @@
           btn.innerHTML = '<span class="spinner"></span>Обработка…';
 
           const formData = new FormData(form);
+          // Capture before form.reset() so we keep the blob alive for preview.
+          const uploadedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
 
           let response;
           try {
@@ -558,12 +576,14 @@
             return;
           }
 
+          const fileLink = renderFileLink(uploadedFile);
+
           if (data.ok && !data.needs_review) {
-            const link = data.sheet_url
+            const sheetLink = data.sheet_url
               ? `<p><a href="${escape(data.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
               : "";
             showResult(
-              `<h3>УПД распознан и добавлен в таблицу</h3>${renderRecord(data.record)}${link}`,
+              `<h3>УПД распознан и добавлен в таблицу</h3>${renderRecord(data.record)}${fileLink}${sheetLink}`,
               "success"
             );
             form.reset();
@@ -571,8 +591,9 @@
             showResult(
               `<h3>Документ распознан не полностью</h3>` +
               renderMissing(data.missing_fields) +
-              `<p>Файл сохранён в логах. Проверьте документ вручную и при необходимости добавьте строку в таблицу.</p>` +
+              `<p>Проверьте документ вручную и при необходимости добавьте строку в таблицу.</p>` +
               renderRecord(data.record) +
+              fileLink +
               `<p class="meta">correlation_id: ${escape(data.correlation_id)}</p>`,
               "warn"
             );
@@ -580,6 +601,7 @@
             const msg = ERROR_MESSAGES[data.error] || data.error || "Неизвестная ошибка.";
             showResult(
               `<h3>Не удалось обработать документ</h3><p>${escape(msg)}</p>` +
+              fileLink +
               `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`,
               "error"
             );

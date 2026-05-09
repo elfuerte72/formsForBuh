@@ -27,12 +27,13 @@ def _onec(upd_number: str, **overrides) -> OneCRecord:
 def _sheet(upd_number: str, **overrides) -> SheetUPDRow:
     base = dict(
         upd_number=upd_number,
-        organization="ООО Тест",
+        organization="Гринлайн",
+        counterparty="ООО Тест",
         date=date(2026, 3, 1),
         amount=100.0,
         foreman="Юра",
         uploaded_at=None,
-        correlation_id=None,
+        status=None,
         source_row=2,
     )
     base.update(overrides)

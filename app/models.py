@@ -34,7 +34,12 @@ class UPDRecord(_Base):
     Field semantics defined in .claude/skills/upd-vision-extraction/SKILL.md.
     """
 
-    organization: str | None = Field(None, description="Full legal name of the seller org")
+    organization: str | None = Field(
+        None, description="Buyer side: на кого выписан УПД (Гринлайн / Исмаилов)"
+    )
+    counterparty: str | None = Field(
+        None, description="Seller side: от кого пришёл УПД (Продавец/Грузоотправитель)"
+    )
     date: Date | None = Field(None, description="Document issue date")
     amount: float | None = Field(None, ge=0, description="Total amount payable (VAT included)")
     upd_number: str | None = Field(None, description="UPD / invoice number as printed")
@@ -44,7 +49,14 @@ class UPDRecord(_Base):
     def needs_review(self) -> bool:
         """True when at least one required field could not be extracted."""
         return any(
-            v is None for v in (self.organization, self.date, self.amount, self.upd_number)
+            v is None
+            for v in (
+                self.organization,
+                self.counterparty,
+                self.date,
+                self.amount,
+                self.upd_number,
+            )
         )
 
     def missing_fields(self) -> list[str]:
@@ -53,6 +65,7 @@ class UPDRecord(_Base):
             name
             for name, value in (
                 ("organization", self.organization),
+                ("counterparty", self.counterparty),
                 ("date", self.date),
                 ("amount", self.amount),
                 ("upd_number", self.upd_number),
@@ -147,11 +160,12 @@ class SheetUPDRow(_Base):
 
     upd_number: str = Field(description="UPD number as written by Claude Vision")
     organization: str | None = None
+    counterparty: str | None = None
     date: Date | None = None
     amount: float | None = Field(None, ge=0)
     foreman: str | None = None
     uploaded_at: str | None = None
-    correlation_id: str | None = None
+    status: str | None = None
     source_row: int = Field(description="1-based row index inside the spreadsheet")
 
 

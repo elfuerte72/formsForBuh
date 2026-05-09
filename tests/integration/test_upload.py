@@ -52,7 +52,8 @@ def fake_vision():
     svc = MagicMock()
     svc.extract = AsyncMock(
         return_value=UPDRecord(
-            organization='ООО "Озеленский"',
+            organization="Гринлайн",
+            counterparty='ООО "Озеленский"',
             date=date(2026, 4, 22),
             amount=10500.0,
             upd_number="6022635717",
@@ -98,7 +99,8 @@ async def test_happy_path_image(client, fake_files, fake_vision, fake_sheets):
     assert body["ok"] is True
     assert body["needs_review"] is False
     assert body["sheet_url"].startswith("https://docs.google.com/spreadsheets/")
-    assert body["record"]["organization"] == 'ООО "Озеленский"'
+    assert body["record"]["organization"] == "Гринлайн"
+    assert body["record"]["counterparty"] == 'ООО "Озеленский"'
 
     fake_files.to_png.assert_awaited_once()
     fake_vision.extract.assert_awaited_once()
@@ -125,7 +127,8 @@ async def test_happy_path_pdf(client, fake_sheets):
 async def test_needs_review_skips_sheets(client, fake_vision, fake_sheets):
     fake_vision.extract = AsyncMock(
         return_value=UPDRecord(
-            organization='ООО "Test"',
+            organization="Гринлайн",
+            counterparty='ООО "Test"',
             date=date(2026, 4, 22),
             amount=None,  # missing → needs_review
             upd_number="123",

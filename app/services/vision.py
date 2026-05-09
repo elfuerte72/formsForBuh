@@ -26,7 +26,9 @@ SYSTEM = """You extract structured data from Russian UPD (универсальн
 A UPD combines an invoice (счёт-фактура) and a delivery note (товарная накладная / транспортная накладная).
 
 Rules:
-1. Extract the SELLER (Продавец / Грузоотправитель), not the buyer (Покупатель / Грузополучатель).
+1. Two parties to extract — do NOT confuse them:
+   • `organization` = the BUYER side (Покупатель / Грузополучатель). This is the company on whose behalf the document was issued — typically "Гринлайн" or "Исмаилов" (also seen as "Кемран"). Include the legal form (ООО / ИП / АО) if printed.
+   • `counterparty` = the SELLER side (Продавец / Грузоотправитель) — the supplier that issued the УПД. Include the legal form too.
 2. Document date: look for "от DD.MM.YYYY" adjacent to "СЧЁТ-ФАКТУРА №". Not the delivery date.
 3. Amount: "Всего к оплате" or "Всего с учётом НДС" — NOT a line-item price. Convert "12 345,67" → 12345.67.
 4. UPD number: take the exact string after "СЧЁТ-ФАКТУРА №", preserving all characters.
@@ -42,7 +44,11 @@ EXTRACT_TOOL = {
         "properties": {
             "organization": {
                 "type": "string",
-                "description": "Full legal name of the SELLER (Продавец/Грузоотправитель), including ООО/ИП/АО prefix",
+                "description": "BUYER side: на кого выписан УПД (Покупатель / Грузополучатель). Typically 'Гринлайн' or 'Исмаилов' (also written as 'Кемран'). Include legal form if printed.",
+            },
+            "counterparty": {
+                "type": "string",
+                "description": "SELLER side: от кого пришёл УПД (Продавец / Грузоотправитель). Full legal name including ООО/ИП/АО prefix.",
             },
             "date": {
                 "type": "string",
@@ -57,7 +63,7 @@ EXTRACT_TOOL = {
                 "description": "UPD number exactly as printed ('СЧЁТ-ФАКТУРА №' value), preserve slashes/letters",
             },
         },
-        "required": ["organization", "date", "amount", "upd_number"],
+        "required": ["organization", "counterparty", "date", "amount", "upd_number"],
     },
 }
 
