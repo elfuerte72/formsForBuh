@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.config import Settings
 from app.core.errors import (
     AppError,
+    RateLimitExceededError,
     SheetsAppendError,
     UnsupportedFileTypeError,
     VisionExtractionError,
@@ -95,6 +96,11 @@ async def process_upd(
             log.warning("upd.unsupported_file", error=str(exc))
             return UploadResult(
                 ok=False, correlation_id=correlation_id, error="unsupported_file_type"
+            )
+        except RateLimitExceededError as exc:
+            log.warning("upd.rate_limited", error=str(exc))
+            return UploadResult(
+                ok=False, correlation_id=correlation_id, error="rate_limit_error"
             )
         except VisionExtractionError as exc:
             log.exception("upd.extract_failed", error=str(exc))

@@ -19,6 +19,9 @@ ENV/
 .env
 .env.*
 !.env.example
+gen-lang-client-*.json
+*service-account*.json
+*credentials*.json
 
 # --- IDE / OS ---
 .vscode/
@@ -42,8 +45,11 @@ README.md
 
 # --- Raw samples / fixtures / docs (not shipped to prod) ---
 tests/
+mobile/
 Screenshot*.png
 *.pdf
+*.docx
+ТЗ_*
 
 # --- Docker / Railway meta (build context shouldn't include itself) ---
 Dockerfile

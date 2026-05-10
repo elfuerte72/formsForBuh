@@ -11,3 +11,8 @@ __pycache__/
 gen-lang-client-*.json
 *service-account*.json
 *credentials*.json
+
+# Local experiments / scratch
+mobile/
+ТЗ_*
+*.docx

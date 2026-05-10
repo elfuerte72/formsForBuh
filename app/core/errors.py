@@ -21,6 +21,10 @@ class VisionExtractionError(AppError):
     """Claude Vision call failed or returned a malformed response."""
 
 
+class RateLimitExceededError(VisionExtractionError):
+    """Anthropic rate limit / quota persisted through all retries."""
+
+
 class SheetsAppendError(AppError):
     """Failure appending a row to the Google Sheet."""
 

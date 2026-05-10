@@ -13,7 +13,7 @@ import base64
 from anthropic import APIConnectionError, AsyncAnthropic, RateLimitError
 from pydantic import ValidationError
 
-from app.core.errors import VisionExtractionError
+from app.core.errors import RateLimitExceededError, VisionExtractionError
 from app.core.logging import get_logger
 from app.models import UPDRecord
 
@@ -138,6 +138,10 @@ class VisionService:
                         attempt=attempt + 1,
                         error=str(exc),
                     )
+                    if isinstance(exc, RateLimitError):
+                        raise RateLimitExceededError(
+                            f"Vision rate-limited after retries: {exc}"
+                        ) from exc
                     raise VisionExtractionError(
                         f"Vision call failed after retries: {exc}"
                     ) from exc
