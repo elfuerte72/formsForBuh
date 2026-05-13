@@ -150,14 +150,28 @@ async def test_needs_review_skips_sheets(client, fake_vision, fake_sheets):
 
 
 @pytest.mark.asyncio
-async def test_invalid_foreman(client):
+async def test_empty_foreman(client):
+    async with client as c:
+        resp = await c.post(
+            "/api/upload",
+            files=_png_payload(),
+            data={"foreman": "   "},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_custom_foreman_name_accepted(client, fake_sheets):
     async with client as c:
         resp = await c.post(
             "/api/upload",
             files=_png_payload(),
             data={"foreman": "Вася"},
         )
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    call = fake_sheets.append_row.await_args
+    assert call.kwargs["foreman"] == "Вася"
 
 
 @pytest.mark.asyncio

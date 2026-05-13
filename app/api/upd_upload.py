@@ -31,7 +31,7 @@ _ALLOWED_CONTENT_TYPES = {
 
 @router.post("/api/upload", status_code=status.HTTP_200_OK)
 async def upload_upd(
-    foreman: Annotated[Foreman, Form()],
+    foreman: Annotated[Foreman, Form(min_length=1, max_length=100)],
     file: Annotated[UploadFile, File()],
     files: Annotated[FilesService, Depends(get_files_service)],
     vision: Annotated[VisionService, Depends(get_vision_service)],
@@ -40,6 +40,13 @@ async def upload_upd(
 ) -> dict[str, object]:
     """Accept a multipart upload, run the pipeline synchronously, return result."""
     correlation_id = uuid.uuid4().hex
+
+    foreman = foreman.strip()
+    if not foreman:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="foreman is required",
+        )
 
     if not file.filename:
         raise HTTPException(

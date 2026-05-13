@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date as Date
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -12,8 +12,9 @@ class _Base(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
 
-# Foreman names shown in the form select. Keep in sync with app/static/index.html.
-Foreman = Literal["Юра", "Гриша", "Боря"]
+# Foreman is a free-form string entered in the upload form. Kept as an alias so
+# call sites stay self-documenting; validation lives in the API handler.
+Foreman = str
 
 
 # Values Claude emits when it can't confidently read a field (see vision SYSTEM prompt).

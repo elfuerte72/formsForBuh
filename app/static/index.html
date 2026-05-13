@@ -97,7 +97,8 @@
     }
 
     select,
-    input[type="file"] {
+    input[type="file"],
+    input[type="text"] {
       width: 100%;
       padding: 10px 12px;
       border: 1px solid var(--border);
@@ -108,7 +109,8 @@
     }
 
     select:focus,
-    input[type="file"]:focus {
+    input[type="file"]:focus,
+    input[type="text"]:focus {
       outline: 2px solid var(--primary);
       outline-offset: -1px;
       border-color: var(--primary);
@@ -351,12 +353,10 @@
       <form id="upload-form">
         <div class="field">
           <label for="foreman">Прораб</label>
-          <select id="foreman" name="foreman" required>
-            <option value="" disabled selected>Выберите…</option>
-            <option value="Юра">Юра</option>
-            <option value="Гриша">Гриша</option>
-            <option value="Боря">Боря</option>
-          </select>
+          <input type="text" id="foreman" name="foreman"
+                 placeholder="Имя прораба"
+                 autocomplete="name"
+                 maxlength="100" required />
         </div>
 
         <div class="field">
