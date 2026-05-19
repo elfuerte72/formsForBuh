@@ -75,6 +75,7 @@ def fake_sheets():
             ),
         ]
     )
+    svc.rewrite_reconciliation = AsyncMock(return_value=None)
     return svc
 
 
@@ -103,13 +104,18 @@ async def test_accept_xls_returns_summary(client, fake_onec, fake_sheets):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["stats"]["onec_total"] == 2
-    assert body["stats"]["foreman_total"] == 1
-    assert [m["upd_number"] for m in body["missing"]] == ["6022503412"]
-    assert body["duplicates"] == []
-    assert body["extras"] == []
+    assert body["stats"] == {"matched": 1, "missing": 1, "extras": 0}
+    # The diff is written into the sheet, not returned in the response.
+    assert "missing" not in body
+    assert "duplicates" not in body
+    assert "extras" not in body
     fake_onec.parse.assert_called_once()
     fake_sheets.read_all_records.assert_awaited_once()
+    fake_sheets.rewrite_reconciliation.assert_awaited_once()
+    written_rows = fake_sheets.rewrite_reconciliation.await_args.args[0]
+    statuses = [r.status for r in written_rows]
+    assert statuses.count("OK") == 1
+    assert statuses.count("NO") == 1
 
 
 @pytest.mark.asyncio

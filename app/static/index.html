@@ -219,6 +219,10 @@
       margin-bottom: 20px;
     }
 
+    .stats-grid.stats-grid-3 {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
     .stat-card {
       background: #f8fafc;
       border: 1px solid var(--border);
@@ -474,6 +478,7 @@
         sheets_append_error: "Документ распознан, но запись в таблицу не удалась. Сообщите администратору.",
         onec_parse_error: "Не удалось разобрать выгрузку 1С. Проверьте формат файла (.xls / .xlsx / .csv) и колонки «Номер вх.», «Дата (вх.)», «Сумма».",
         sheets_read_error: "Не удалось прочитать таблицу прорабов. Сообщите администратору.",
+        sheets_write_error: "Не удалось записать сводку в Google Sheet. Сообщите администратору.",
         app_error: "Внутренняя ошибка приложения.",
         unexpected_error: "Произошла непредвиденная ошибка."
       };
@@ -494,56 +499,6 @@
           .replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;")
           .replace(/'/g, "&#39;");
-      }
-
-      function formatAmount(value) {
-        if (value === null || value === undefined || value === "") return "—";
-        const n = Number(value);
-        if (!isFinite(n)) return escape(value);
-        return n.toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " ₽";
-      }
-
-      function formatDate(value) {
-        if (!value) return "—";
-        const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
-        if (!m) return escape(value);
-        return `${m[3]}.${m[2]}.${m[1]}`;
-      }
-
-      function copyToClipboard(text, button) {
-        const onSuccess = () => {
-          const original = button.dataset.original || button.textContent;
-          button.dataset.original = original;
-          button.textContent = "Скопировано";
-          button.classList.add("copied");
-          setTimeout(() => {
-            button.textContent = original;
-            button.classList.remove("copied");
-          }, 1500);
-        };
-        if (navigator.clipboard && window.isSecureContext) {
-          navigator.clipboard.writeText(text).then(onSuccess, () => fallbackCopy(text, onSuccess));
-        } else {
-          fallbackCopy(text, onSuccess);
-        }
-      }
-
-      function fallbackCopy(text, onSuccess) {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        try {
-          document.execCommand("copy");
-          onSuccess();
-        } catch (_) {
-          alert("Не удалось скопировать. Скопируйте вручную:\n\n" + text);
-        } finally {
-          document.body.removeChild(ta);
-        }
       }
 
       // ----- tabs -----
@@ -816,114 +771,6 @@
           return `<div class="stat-card${kind ? " " + kind : ""}"><div class="stat-label">${escape(label)}</div><div class="stat-value">${escape(value)}</div></div>`;
         }
 
-        function renderStats(stats) {
-          if (!stats) return "";
-          const matchedKind = stats.coverage_percent === 100 ? "success" : (stats.missing > 0 ? "warn" : "");
-          return (
-            `<div class="stats-grid">` +
-            statCard("В 1С", stats.onec_total, "") +
-            statCard("В таблице", stats.foreman_total, "") +
-            statCard("Совпало", stats.matched + " / " + stats.onec_total, matchedKind) +
-            statCard("Покрытие", stats.coverage_percent.toFixed(1) + "%", matchedKind) +
-            `</div>`
-          );
-        }
-
-        function buildCopyText(items, builder) {
-          return items.map(builder).join("\n");
-        }
-
-        function renderMissingSection(missing) {
-          const count = missing.length;
-          const heading = `Не загружено прорабами`;
-          if (count === 0) {
-            return sectionWrap(heading, 0, null, `<div class="empty-list">Все УПД из 1С присутствуют в таблице.</div>`);
-          }
-          const copyText = buildCopyText(missing, m => `№${m.upd_number} от ${formatDate(m.date)} на ${formatAmount(m.amount).replace(" ₽", "")} ₽`);
-          const rows = missing.map(m => (
-            `<tr>` +
-            `<td>${escape(m.upd_number)}</td>` +
-            `<td class="num">${escape(formatDate(m.date))}</td>` +
-            `<td class="num">${escape(formatAmount(m.amount))}</td>` +
-            `<td>${escape(m.organization || "—")}</td>` +
-            `</tr>`
-          )).join("");
-          const tableHtml = (
-            `<table class="diff-table">` +
-            `<thead><tr><th>Номер</th><th>Дата</th><th>Сумма</th><th>Контрагент</th></tr></thead>` +
-            `<tbody>${rows}</tbody></table>`
-          );
-          return sectionWrap(heading, count, copyText, tableHtml);
-        }
-
-        function renderDuplicatesSection(duplicates) {
-          const count = duplicates.length;
-          const heading = `Дубликаты в таблице прорабов`;
-          if (count === 0) {
-            return sectionWrap(heading, 0, null, `<div class="empty-list">Дубликатов нет.</div>`);
-          }
-          const copyText = buildCopyText(duplicates, d => `№${d.upd_number} — ${d.count}× (${(d.foremen || []).join(", ") || "—"})`);
-          const rows = duplicates.map(d => (
-            `<tr>` +
-            `<td>${escape(d.upd_number)}</td>` +
-            `<td class="num">${escape(d.count)}</td>` +
-            `<td>${escape((d.foremen || []).join(", ") || "—")}</td>` +
-            `<td>${escape((d.dates || []).map(formatDate).join(", ") || "—")}</td>` +
-            `</tr>`
-          )).join("");
-          const tableHtml = (
-            `<table class="diff-table">` +
-            `<thead><tr><th>Номер</th><th>Раз</th><th>Прорабы</th><th>Даты</th></tr></thead>` +
-            `<tbody>${rows}</tbody></table>`
-          );
-          return sectionWrap(heading, count, copyText, tableHtml);
-        }
-
-        function renderExtrasSection(extras) {
-          const count = extras.length;
-          const heading = `Лишние в таблице (нет в 1С)`;
-          if (count === 0) {
-            return sectionWrap(heading, 0, null, `<div class="empty-list">Лишних УПД нет.</div>`);
-          }
-          const copyText = buildCopyText(extras, e => `№${e.upd_number} от ${formatDate(e.date)} (${e.foreman || "—"})`);
-          const rows = extras.map(e => (
-            `<tr>` +
-            `<td>${escape(e.upd_number)}</td>` +
-            `<td>${escape(e.foreman || "—")}</td>` +
-            `<td class="num">${escape(formatDate(e.date))}</td>` +
-            `</tr>`
-          )).join("");
-          const tableHtml = (
-            `<table class="diff-table">` +
-            `<thead><tr><th>Номер</th><th>Прораб</th><th>Дата</th></tr></thead>` +
-            `<tbody>${rows}</tbody></table>`
-          );
-          return sectionWrap(heading, count, copyText, tableHtml);
-        }
-
-        function sectionWrap(heading, count, copyText, bodyHtml) {
-          const copyBtn = copyText
-            ? `<button type="button" class="copy-btn" data-copy="${escape(copyText)}">Скопировать список</button>`
-            : "";
-          return (
-            `<div class="section-list">` +
-            `<div class="section-list-header">` +
-            `<h3>${escape(heading)} <span class="count-badge">(${count})</span></h3>` +
-            copyBtn +
-            `</div>` +
-            bodyHtml +
-            `</div>`
-          );
-        }
-
-        function attachCopyHandlers(rootEl) {
-          rootEl.querySelectorAll(".copy-btn[data-copy]").forEach(btn => {
-            btn.addEventListener("click", () => {
-              copyToClipboard(btn.dataset.copy, btn);
-            });
-          });
-        }
-
         async function submit(event) {
           event.preventDefault();
           resultEl.classList.add("hidden");
@@ -976,22 +823,28 @@
             return;
           }
 
-          const missing = data.missing || [];
-          const duplicates = data.duplicates || [];
-          const extras = data.extras || [];
+          const stats = data.stats || { matched: 0, missing: 0, extras: 0 };
+          const bannerKind = stats.missing === 0 && stats.extras === 0 ? "success" : "warn";
+          const bannerTitle = bannerKind === "success"
+            ? "Сводка готова — расхождений нет"
+            : "Сводка готова — есть расхождения";
+          const matchedKind = stats.matched > 0 ? "success" : "";
+          const missingKind = stats.missing > 0 ? "warn" : "";
+          const extrasKind = stats.extras > 0 ? "warn" : "";
 
-          let html = "";
-          if (missing.length === 0 && duplicates.length === 0 && extras.length === 0) {
-            html += `<div class="banner success" style="margin-top:0;"><h3>Все УПД на месте</h3><p>Расхождений между 1С и таблицей прорабов нет.</p></div>`;
-          }
-          html += renderStats(data.stats);
-          html += renderMissingSection(missing);
-          html += renderDuplicatesSection(duplicates);
-          html += renderExtrasSection(extras);
-          html += `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`;
+          const html =
+            `<div class="banner ${bannerKind}" style="margin-top:0;">` +
+            `<h3>${bannerTitle}</h3>` +
+            `<p>Полная таблица обновлена в Google Sheet.</p>` +
+            `</div>` +
+            `<div class="stats-grid stats-grid-3">` +
+            statCard("Совпало", stats.matched, matchedKind) +
+            statCard("Не хватает", stats.missing, missingKind) +
+            statCard("Лишние", stats.extras, extrasKind) +
+            `</div>` +
+            `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`;
 
           showSummary(html);
-          attachCopyHandlers(resultEl);
           btn.disabled = false;
           btn.textContent = "Сравнить";
         }

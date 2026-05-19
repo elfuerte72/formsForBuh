@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date as Date
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -192,56 +192,47 @@ class SheetUPDRow(_Base):
     source_row: int = Field(description="1-based row index inside the spreadsheet")
 
 
-class MissingUPD(_Base):
-    """A UPD listed in 1С but never uploaded by foremen."""
-
-    upd_number: str
-    date: Date | None = None
-    amount: float | None = None
-    organization: str | None = None
-    source_row: int
+ReconStatus = Literal["OK", "NO", "ЛИШНЕЕ"]
 
 
-class DuplicateUPD(_Base):
-    """A UPD uploaded more than once into the foreman sheet."""
+class ReconRow(_Base):
+    """One side-by-side row written into the Google Sheet on reconciliation.
 
-    upd_number: str
-    count: int = Field(ge=2)
-    foremen: list[str] = Field(default_factory=list)
-    dates: list[Date] = Field(default_factory=list)
+    Maps directly onto the 12-column layout in ``app/services/sheets.py``:
+    yellow block (1С), green block (foreman upload), status.
+    """
 
-
-class ExtraUPD(_Base):
-    """A UPD uploaded by a foreman that has no match in the 1С export."""
-
-    upd_number: str
-    foreman: str | None = None
-    date: Date | None = None
+    status: ReconStatus
+    onec_date: Date | None = None
+    onec_counterparty: str | None = None
+    onec_amount: float | None = None
+    onec_upd_number: str | None = None
+    green_upd_number: str | None = None
+    green_date: Date | None = None
+    green_amount: float | None = None
+    green_counterparty: str | None = None
+    green_organization: str | None = None
+    green_foreman: str | None = None
+    green_uploaded_at: str | None = None
 
 
 class ReconciliationStats(_Base):
-    """High-level counts shown above the three lists."""
+    """Counts shown on the form after reconciliation."""
 
-    onec_total: int = Field(ge=0)
-    foreman_total: int = Field(ge=0)
     matched: int = Field(ge=0)
     missing: int = Field(ge=0)
-    duplicates: int = Field(ge=0)
     extras: int = Field(ge=0)
-    coverage_percent: float = Field(ge=0, le=100)
 
 
 class ReconciliationResult(_Base):
     """Response DTO returned by ``POST /api/reconciliation``.
 
-    Mirrors :class:`UploadResult`: HTTP 200 unless the request is malformed;
-    pipeline errors land here as ``ok=False`` with a stable ``error`` code.
+    Pipeline errors land here as ``ok=False`` with a stable ``error`` code;
+    the diff itself goes straight into the Google Sheet — the API only
+    reports counts.
     """
 
     ok: bool
     correlation_id: str
-    missing: list[MissingUPD] = Field(default_factory=list)
-    duplicates: list[DuplicateUPD] = Field(default_factory=list)
-    extras: list[ExtraUPD] = Field(default_factory=list)
     stats: ReconciliationStats | None = None
     error: str | None = None

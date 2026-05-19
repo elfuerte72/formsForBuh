@@ -1,4 +1,4 @@
-"""Unit tests for the reconciliation pipeline (diff + error translation)."""
+"""Unit tests for the reconciliation pipeline (diff + sheet rewrite)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.core.errors import OneCParseError, SheetsReadError
+from app.core.errors import OneCParseError, SheetsAppendError, SheetsReadError
 from app.models import OneCRecord, SheetUPDRow
 from app.pipelines.reconciliation import reconcile
 
@@ -40,8 +40,14 @@ def _sheet(upd_number: str, **overrides) -> SheetUPDRow:
     return SheetUPDRow(**base)
 
 
-def _services(*, onec_records=None, sheet_rows=None,
-              onec_exc=None, sheets_exc=None):
+def _services(
+    *,
+    onec_records=None,
+    sheet_rows=None,
+    onec_exc=None,
+    sheets_exc=None,
+    rewrite_exc=None,
+):
     onec = MagicMock()
     if onec_exc is not None:
         onec.parse = MagicMock(side_effect=onec_exc)
@@ -53,12 +59,16 @@ def _services(*, onec_records=None, sheet_rows=None,
         sheets.read_all_records = AsyncMock(side_effect=sheets_exc)
     else:
         sheets.read_all_records = AsyncMock(return_value=sheet_rows or [])
+    if rewrite_exc is not None:
+        sheets.rewrite_reconciliation = AsyncMock(side_effect=rewrite_exc)
+    else:
+        sheets.rewrite_reconciliation = AsyncMock(return_value=None)
 
     return onec, sheets
 
 
 @pytest.mark.asyncio
-async def test_perfect_match_yields_no_diff() -> None:
+async def test_perfect_match_writes_ok_rows() -> None:
     onec, sheets = _services(
         onec_records=[_onec("U-1"), _onec("U-2")],
         sheet_rows=[_sheet("U-1"), _sheet("U-2")],
@@ -71,15 +81,18 @@ async def test_perfect_match_yields_no_diff() -> None:
         correlation_id="cid",
     )
     assert result.ok is True
-    assert result.missing == []
-    assert result.duplicates == []
-    assert result.extras == []
     assert result.stats.matched == 2
-    assert result.stats.coverage_percent == 100.0
+    assert result.stats.missing == 0
+    assert result.stats.extras == 0
+
+    sheets.rewrite_reconciliation.assert_awaited_once()
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    assert [r.status for r in written] == ["OK", "OK"]
+    assert all(r.onec_upd_number and r.green_upd_number for r in written)
 
 
 @pytest.mark.asyncio
-async def test_missing_lists_unmatched_onec_rows() -> None:
+async def test_missing_emits_no_row_and_counts_in_stats() -> None:
     onec, sheets = _services(
         onec_records=[_onec("U-1"), _onec("U-2", source_row=11)],
         sheet_rows=[_sheet("U-2")],
@@ -87,14 +100,44 @@ async def test_missing_lists_unmatched_onec_rows() -> None:
     result = await reconcile(
         raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
     )
-    assert [m.upd_number for m in result.missing] == ["U-1"]
-    assert result.stats.missing == 1
+    assert result.ok is True
     assert result.stats.matched == 1
-    assert result.stats.coverage_percent == 50.0
+    assert result.stats.missing == 1
+    assert result.stats.extras == 0
+
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    statuses = [r.status for r in written]
+    assert statuses.count("NO") == 1
+    assert statuses.count("OK") == 1
+    no_row = next(r for r in written if r.status == "NO")
+    assert no_row.onec_upd_number == "U-1"
+    assert no_row.green_upd_number is None
 
 
 @pytest.mark.asyncio
-async def test_duplicates_collected_when_sheet_has_repeats() -> None:
+async def test_extras_emit_lishnee_row() -> None:
+    onec, sheets = _services(
+        onec_records=[_onec("U-1")],
+        sheet_rows=[_sheet("U-1"), _sheet("X-9", foreman="Боря")],
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    assert result.stats.matched == 1
+    assert result.stats.extras == 1
+    assert result.stats.missing == 0
+
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    extra_rows = [r for r in written if r.status == "ЛИШНЕЕ"]
+    assert len(extra_rows) == 1
+    assert extra_rows[0].green_upd_number == "X-9"
+    assert extra_rows[0].green_foreman == "Боря"
+    assert extra_rows[0].onec_upd_number is None
+
+
+@pytest.mark.asyncio
+async def test_foreman_duplicates_produce_multiple_ok_rows() -> None:
+    """Two foreman uploads of the same UPD remain as two paired OK rows."""
     onec, sheets = _services(
         onec_records=[_onec("U-1")],
         sheet_rows=[
@@ -105,29 +148,15 @@ async def test_duplicates_collected_when_sheet_has_repeats() -> None:
     result = await reconcile(
         raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
     )
-    assert len(result.duplicates) == 1
-    dup = result.duplicates[0]
-    assert dup.upd_number == "U-1"
-    assert dup.count == 2
-    assert sorted(dup.foremen) == ["Гриша", "Юра"]
-
-
-@pytest.mark.asyncio
-async def test_extras_listed_when_sheet_has_unknown_upd() -> None:
-    onec, sheets = _services(
-        onec_records=[_onec("U-1")],
-        sheet_rows=[_sheet("U-1"), _sheet("X-9", foreman="Боря")],
-    )
-    result = await reconcile(
-        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
-    )
-    assert [e.upd_number for e in result.extras] == ["X-9"]
-    assert result.extras[0].foreman == "Боря"
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    ok_rows = [r for r in written if r.status == "OK"]
+    assert len(ok_rows) == 2
+    assert {r.green_foreman for r in ok_rows} == {"Юра", "Гриша"}
+    assert result.stats.matched == 2
 
 
 @pytest.mark.asyncio
 async def test_normalization_matches_padding_and_spaces() -> None:
-    """A 1С number `00012345` and a sheet number ` 12 345 ` must match."""
     onec, sheets = _services(
         onec_records=[_onec("00012345")],
         sheet_rows=[_sheet(" 12 345 ")],
@@ -135,9 +164,9 @@ async def test_normalization_matches_padding_and_spaces() -> None:
     result = await reconcile(
         raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
     )
-    assert result.missing == []
-    assert result.extras == []
     assert result.stats.matched == 1
+    assert result.stats.missing == 0
+    assert result.stats.extras == 0
 
 
 @pytest.mark.asyncio
@@ -149,6 +178,7 @@ async def test_onec_parse_error_returned_as_machine_code() -> None:
     assert result.ok is False
     assert result.error == "onec_parse_error"
     sheets.read_all_records.assert_not_awaited()
+    sheets.rewrite_reconciliation.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -162,3 +192,18 @@ async def test_sheets_read_error_returned_as_machine_code() -> None:
     )
     assert result.ok is False
     assert result.error == "sheets_read_error"
+    sheets.rewrite_reconciliation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sheets_write_error_returned_as_machine_code() -> None:
+    onec, sheets = _services(
+        onec_records=[_onec("U-1")],
+        sheet_rows=[_sheet("U-1")],
+        rewrite_exc=SheetsAppendError("api down"),
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    assert result.ok is False
+    assert result.error == "sheets_write_error"
