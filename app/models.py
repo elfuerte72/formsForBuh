@@ -123,19 +123,41 @@ class DownloadedFile(_Base):
 
 
 class UploadResult(_Base):
-    """Response DTO returned by ``POST /api/upload``.
+    """Per-file result inside :class:`BatchUploadResult`.
 
-    HTTP status is always 200 unless the request itself is malformed (415/413/422).
-    The frontend branches on ``ok`` and ``needs_review`` to render the right banner.
+    Per-file validation failures (unsupported type, empty / too large) surface
+    here as ``ok=False`` with a stable ``error`` code — request-level problems
+    (no foreman, no files, too many files) still raise HTTP 413/422 from the
+    handler. The frontend branches on ``ok`` and ``needs_review`` to render the
+    right banner. ``filename`` is populated by the handler / batch wrapper so
+    the UI can pair each result with the file the user selected.
     """
 
     ok: bool
     correlation_id: str
+    filename: str | None = None
     record: UPDRecord | None = None
     sheet_url: str | None = None
     needs_review: bool = False
     missing_fields: list[str] | None = None
     error: str | None = None
+
+
+class BatchUploadResult(_Base):
+    """Response DTO returned by ``POST /api/upload``.
+
+    Always wraps results in ``items`` — even when the user submitted a single
+    file.
+
+    Invariant: ``ok`` is ``True`` iff **every** item has ``ok=True`` and
+    ``needs_review=False``. A single partial-recognition (``needs_review=True``)
+    or per-file error flips the batch ``ok`` to ``False``. The frontend uses
+    this as a single signal to decide whether to reset the form.
+    """
+
+    ok: bool
+    correlation_id: str
+    items: list[UploadResult] = Field(default_factory=list)
 
 
 # --- Stage 2: reconciliation ------------------------------------------------

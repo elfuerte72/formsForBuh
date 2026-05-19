@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     anthropic_model: str = Field("claude-sonnet-4-6", description="Model used by VisionService")
     max_image_dpi: int = Field(200, description="DPI when rasterising PDF page to PNG")
     max_upload_bytes: int = Field(25 * 1024 * 1024, description="Hard cap on uploaded file size")
+    max_batch_files: int = Field(10, description="Maximum number of files per /api/upload request")
     http_timeout_seconds: float = Field(30.0, description="httpx timeout for outbound calls")
 
     @cached_property

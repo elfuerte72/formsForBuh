@@ -120,3 +120,38 @@ async def process_upd(
             return UploadResult(
                 ok=False, correlation_id=correlation_id, error="unexpected_error"
             )
+
+
+async def process_upd_batch(
+    *,
+    items: list[tuple[bytes, str, str]],
+    foreman: str,
+    files: FilesService,
+    vision: VisionService,
+    sheets: SheetsService,
+    settings: Settings,
+    correlation_id: str,
+) -> list[UploadResult]:
+    """Run :func:`process_upd` sequentially over a list of (raw, filename, media_type).
+
+    Sequential — not ``asyncio.gather`` — to avoid hitting Anthropic rate limits
+    and to keep ``gspread.append_row`` writes ordered. Each child call gets a
+    derived correlation id (``"<batch>-<i>"``) so a single batch can be grepped
+    end-to-end. The ``filename`` is propagated onto each returned result.
+    """
+    results: list[UploadResult] = []
+    for index, (raw, filename, media_type) in enumerate(items):
+        sub_id = f"{correlation_id}-{index}"
+        result = await process_upd(
+            raw=raw,
+            filename=filename,
+            media_type=media_type,
+            foreman=foreman,
+            files=files,
+            vision=vision,
+            sheets=sheets,
+            settings=settings,
+            correlation_id=sub_id,
+        )
+        results.append(result.model_copy(update={"filename": filename}))
+    return results

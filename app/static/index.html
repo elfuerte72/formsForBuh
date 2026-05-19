@@ -329,6 +329,81 @@
       text-align: center;
     }
 
+    /* --- Upload batch view --- */
+    .file-preview {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .file-preview ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .file-preview li {
+      margin: 2px 0;
+    }
+
+    .batch-summary {
+      margin-top: 20px;
+      padding: 10px 14px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .batch-summary strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .item-banner {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border-left: 4px solid;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .item-banner.success {
+      background: var(--success-bg);
+      border-color: var(--success-border);
+      color: #065f46;
+    }
+
+    .item-banner.warn {
+      background: var(--warn-bg);
+      border-color: var(--warn-border);
+      color: #92400e;
+    }
+
+    .item-banner.error {
+      background: var(--error-bg);
+      border-color: var(--error-border);
+      color: #991b1b;
+    }
+
+    .item-banner h4 {
+      margin: 0 0 6px 0;
+      font-size: 14px;
+      font-weight: 600;
+      word-break: break-all;
+    }
+
+    .item-banner ul {
+      margin: 6px 0 0 0;
+      padding-left: 20px;
+    }
+
+    .item-banner a {
+      color: inherit;
+      font-weight: 600;
+    }
+
     @media (max-width: 540px) {
       .stats-grid { grid-template-columns: repeat(2, 1fr); }
       table.diff-table th,
@@ -360,8 +435,9 @@
         </div>
 
         <div class="field">
-          <label for="file">Файл УПД (PDF или фото)</label>
-          <input type="file" id="file" name="file" accept="application/pdf,image/*" required />
+          <label for="file">Файлы УПД (PDF или фото, можно несколько)</label>
+          <input type="file" id="file" name="files" accept="application/pdf,image/*" multiple required />
+          <div id="file-preview" class="file-preview hidden"></div>
         </div>
 
         <button type="submit" id="submit-btn">Отправить</button>
@@ -487,31 +563,68 @@
       });
 
       // ============================================================
-      // UPLOAD form
+      // UPLOAD form (multi-file batch)
       // ============================================================
       (function initUpload() {
         const form = document.getElementById("upload-form");
         const fileInput = document.getElementById("file");
+        const previewEl = document.getElementById("file-preview");
         const btn = document.getElementById("submit-btn");
         const resultEl = document.getElementById("result");
 
-        // Blob URL for the just-uploaded file so the bookkeeper can review what
-        // they sent. Revoked on each new submission to avoid memory leaks.
-        let lastFileUrl = null;
+        // Map filename → blob URL for inline previews of just-uploaded files.
+        // Revoked on each new submission to avoid memory leaks.
+        let lastBlobUrls = new Map();
 
-        function showResult(html, kind) {
-          resultEl.className = "banner " + kind;
-          resultEl.innerHTML = html;
-          resultEl.classList.remove("hidden");
+        // Per-error-code copy that explains the validation failure to the user.
+        // The pipeline error codes are also handled via the shared ERROR_MESSAGES.
+        const FILE_ERROR_MESSAGES = Object.assign({}, ERROR_MESSAGES, {
+          file_too_large: "Файл слишком большой.",
+          empty_file: "Файл пустой."
+        });
+
+        function formatBytes(n) {
+          if (n < 1024) return n + " Б";
+          if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " КБ";
+          return (n / 1024 / 1024).toFixed(1) + " МБ";
         }
 
-        function renderFileLink(file) {
-          if (!file) return "";
-          if (lastFileUrl) URL.revokeObjectURL(lastFileUrl);
-          lastFileUrl = URL.createObjectURL(file);
+        function renderPreview() {
+          const files = fileInput.files;
+          if (!files || files.length === 0) {
+            previewEl.classList.add("hidden");
+            previewEl.innerHTML = "";
+            return;
+          }
+          const items = Array.from(files)
+            .map(f => `<li>${escape(f.name)} <span>(${formatBytes(f.size)})</span></li>`)
+            .join("");
+          previewEl.innerHTML = `<p>Выбрано файлов: <strong>${files.length}</strong></p><ul>${items}</ul>`;
+          previewEl.classList.remove("hidden");
+        }
+
+        fileInput.addEventListener("change", renderPreview);
+
+        function revokeBlobUrls() {
+          for (const url of lastBlobUrls.values()) URL.revokeObjectURL(url);
+          lastBlobUrls = new Map();
+        }
+
+        function buildBlobUrls(files) {
+          revokeBlobUrls();
+          for (const f of files) {
+            if (!lastBlobUrls.has(f.name)) {
+              lastBlobUrls.set(f.name, URL.createObjectURL(f));
+            }
+          }
+        }
+
+        function renderFileLink(filename) {
+          const url = filename ? lastBlobUrls.get(filename) : null;
+          if (!url) return "";
           return (
-            `<p><a href="${escape(lastFileUrl)}" target="_blank" rel="noopener">` +
-            `Посмотреть отправленный файл (${escape(file.name)}) →</a></p>`
+            `<p><a href="${escape(url)}" target="_blank" rel="noopener">` +
+            `Посмотреть отправленный файл (${escape(filename)}) →</a></p>`
           );
         }
 
@@ -535,15 +648,106 @@
           return `<p>Не удалось распознать: <strong>${escape(labels)}</strong></p>`;
         }
 
+        function classifyItem(item) {
+          if (item.ok && !item.needs_review) return "success";
+          if (item.ok && item.needs_review) return "warn";
+          return "error";
+        }
+
+        function renderItem(item, sheetUrlFallback) {
+          const kind = classifyItem(item);
+          const title = item.filename || "(без имени)";
+          const fileLink = renderFileLink(item.filename);
+
+          if (kind === "success") {
+            const sheetUrl = item.sheet_url || sheetUrlFallback;
+            const sheetLink = sheetUrl
+              ? `<p><a href="${escape(sheetUrl)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
+              : "";
+            return (
+              `<div class="item-banner success">` +
+              `<h4>✅ ${escape(title)}</h4>` +
+              `<p>УПД распознан и добавлен в таблицу.</p>` +
+              renderRecord(item.record) +
+              fileLink +
+              sheetLink +
+              `</div>`
+            );
+          }
+
+          if (kind === "warn") {
+            return (
+              `<div class="item-banner warn">` +
+              `<h4>⚠️ ${escape(title)}</h4>` +
+              `<p>Документ распознан не полностью. Строка в таблицу не добавлена.</p>` +
+              renderMissing(item.missing_fields) +
+              renderRecord(item.record) +
+              fileLink +
+              `<p class="meta">correlation_id: ${escape(item.correlation_id || "")}</p>` +
+              `</div>`
+            );
+          }
+
+          const msg = FILE_ERROR_MESSAGES[item.error] || item.error || "Неизвестная ошибка.";
+          return (
+            `<div class="item-banner error">` +
+            `<h4>❌ ${escape(title)}</h4>` +
+            `<p>${escape(msg)}</p>` +
+            fileLink +
+            `<p class="meta">correlation_id: ${escape(item.correlation_id || "")}</p>` +
+            `</div>`
+          );
+        }
+
+        function showResultRaw(html, kind) {
+          resultEl.className = "banner " + kind;
+          resultEl.innerHTML = html;
+          resultEl.classList.remove("hidden");
+        }
+
+        function showBatchResult(data) {
+          const items = Array.isArray(data.items) ? data.items : [];
+          const total = items.length;
+          const success = items.filter(i => i.ok && !i.needs_review).length;
+          const warn = items.filter(i => i.ok && i.needs_review).length;
+          const error = items.filter(i => !i.ok).length;
+
+          // Pick a fallback sheet URL from any successful item so success
+          // banners without a per-item sheet_url still link to the spreadsheet.
+          const sheetUrlFallback = (items.find(i => i.sheet_url) || {}).sheet_url || null;
+
+          const summary =
+            `<div class="batch-summary">` +
+            `Обработано: <strong>${total}</strong> · ` +
+            `✅ ${success} · ⚠️ ${warn} · ❌ ${error}` +
+            `</div>`;
+          const body = items.map(i => renderItem(i, sheetUrlFallback)).join("");
+
+          resultEl.className = "";
+          resultEl.innerHTML = summary + body;
+          resultEl.classList.remove("hidden");
+        }
+
         async function submit(event) {
           event.preventDefault();
           resultEl.classList.add("hidden");
           btn.disabled = true;
           btn.innerHTML = '<span class="spinner"></span>Обработка…';
 
-          const formData = new FormData(form);
-          // Capture before form.reset() so we keep the blob alive for preview.
-          const uploadedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+          const selected = fileInput.files ? Array.from(fileInput.files) : [];
+          if (selected.length === 0) {
+            showResultRaw(`<h3>Не выбран файл</h3><p>Выберите хотя бы один файл УПД.</p>`, "error");
+            btn.disabled = false;
+            btn.textContent = "Отправить";
+            return;
+          }
+
+          // Build blob URLs BEFORE we (possibly) reset the form so previews keep working.
+          buildBlobUrls(selected);
+
+          const formData = new FormData();
+          formData.append("foreman", document.getElementById("foreman").value);
+          for (const f of selected) formData.append("files", f);
 
           let response;
           try {
@@ -552,7 +756,7 @@
               body: formData
             });
           } catch (err) {
-            showResult(
+            showResultRaw(
               `<h3>Не удалось отправить</h3><p>Проверьте подключение к интернету и попробуйте ещё раз.</p>`,
               "error"
             );
@@ -562,50 +766,23 @@
           }
 
           let data = null;
-          try {
-            data = await response.json();
-          } catch (_) { /* fallthrough */ }
+          try { data = await response.json(); } catch (_) { /* fallthrough */ }
 
           if (!response.ok) {
             const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
-            showResult(
-              `<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`,
-              "error"
-            );
+            showResultRaw(`<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`, "error");
             btn.disabled = false;
             btn.textContent = "Отправить";
             return;
           }
 
-          const fileLink = renderFileLink(uploadedFile);
+          showBatchResult(data);
 
-          if (data.ok && !data.needs_review) {
-            const sheetLink = data.sheet_url
-              ? `<p><a href="${escape(data.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
-              : "";
-            showResult(
-              `<h3>УПД распознан и добавлен в таблицу</h3>${renderRecord(data.record)}${fileLink}${sheetLink}`,
-              "success"
-            );
+          // Reset only when every file succeeded without needs_review.
+          if (data.ok) {
             form.reset();
-          } else if (data.ok && data.needs_review) {
-            showResult(
-              `<h3>Документ распознан не полностью</h3>` +
-              renderMissing(data.missing_fields) +
-              `<p>Проверьте документ вручную и при необходимости добавьте строку в таблицу.</p>` +
-              renderRecord(data.record) +
-              fileLink +
-              `<p class="meta">correlation_id: ${escape(data.correlation_id)}</p>`,
-              "warn"
-            );
-          } else {
-            const msg = ERROR_MESSAGES[data.error] || data.error || "Неизвестная ошибка.";
-            showResult(
-              `<h3>Не удалось обработать документ</h3><p>${escape(msg)}</p>` +
-              fileLink +
-              `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`,
-              "error"
-            );
+            previewEl.classList.add("hidden");
+            previewEl.innerHTML = "";
           }
 
           btn.disabled = false;
