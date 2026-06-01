@@ -535,7 +535,8 @@
         // The pipeline error codes are also handled via the shared ERROR_MESSAGES.
         const FILE_ERROR_MESSAGES = Object.assign({}, ERROR_MESSAGES, {
           file_too_large: "Файл слишком большой.",
-          empty_file: "Файл пустой."
+          empty_file: "Файл пустой.",
+          network_error: "Не удалось отправить эту пачку — проверьте интернет и повторите."
         });
 
         function formatBytes(n) {
@@ -660,6 +661,16 @@
           resultEl.classList.remove("hidden");
         }
 
+        // Live progress while a large selection is sent chunk-by-chunk.
+        function showProgress(done, total) {
+          resultEl.className = "";
+          resultEl.innerHTML =
+            `<div class="batch-summary">` +
+            `<span class="spinner"></span>Обработка… готово ` +
+            `<strong>${done}</strong> из <strong>${total}</strong></div>`;
+          resultEl.classList.remove("hidden");
+        }
+
         function showBatchResult(data) {
           const items = Array.isArray(data.items) ? data.items : [];
           const total = items.length;
@@ -700,41 +711,67 @@
           // Build blob URLs BEFORE we (possibly) reset the form so previews keep working.
           buildBlobUrls(selected);
 
-          const formData = new FormData();
-          formData.append("foreman", document.getElementById("foreman").value);
-          for (const f of selected) formData.append("files", f);
+          const foremanValue = document.getElementById("foreman").value;
 
-          let response;
-          try {
-            response = await fetch("/api/upload", {
-              method: "POST",
-              body: formData
-            });
-          } catch (err) {
-            showResultRaw(
-              `<h3>Не удалось отправить</h3><p>Проверьте подключение к интернету и попробуйте ещё раз.</p>`,
-              "error"
-            );
-            btn.disabled = false;
-            btn.textContent = "Отправить";
-            return;
+          // The backend caps each /api/upload request at `max_batch_files` and
+          // processes files sequentially, so one giant request would blow the
+          // proxy timeout. Split the selection into chunks and POST them one
+          // after another, aggregating per-file results into a single batch view.
+          // CHUNK_SIZE must stay <= the backend's max_batch_files (app/config.py).
+          const CHUNK_SIZE = 10;
+          const chunks = [];
+          for (let i = 0; i < selected.length; i += CHUNK_SIZE) {
+            chunks.push(selected.slice(i, i + CHUNK_SIZE));
           }
 
-          let data = null;
-          try { data = await response.json(); } catch (_) { /* fallthrough */ }
+          const allItems = [];
+          let processed = 0;
 
-          if (!response.ok) {
-            const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
-            showResultRaw(`<h3>Ошибка ${response.status}</h3><p>${escape(detail)}</p>`, "error");
-            btn.disabled = false;
-            btn.textContent = "Отправить";
-            return;
+          for (const chunk of chunks) {
+            showProgress(processed, selected.length);
+
+            const formData = new FormData();
+            formData.append("foreman", foremanValue);
+            for (const f of chunk) formData.append("files", f);
+
+            let response;
+            try {
+              response = await fetch("/api/upload", {
+                method: "POST",
+                body: formData
+              });
+            } catch (err) {
+              // Network drop: fail just this chunk's files and keep going.
+              for (const f of chunk) {
+                allItems.push({ ok: false, filename: f.name, error: "network_error" });
+              }
+              processed += chunk.length;
+              continue;
+            }
+
+            let data = null;
+            try { data = await response.json(); } catch (_) { /* fallthrough */ }
+
+            if (!response.ok || !data || !Array.isArray(data.items)) {
+              const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
+              for (const f of chunk) {
+                allItems.push({ ok: false, filename: f.name, error: detail });
+              }
+              processed += chunk.length;
+              continue;
+            }
+
+            for (const item of data.items) allItems.push(item);
+            processed += chunk.length;
           }
 
-          showBatchResult(data);
+          const batchOk = allItems.length > 0 &&
+            allItems.every(i => i.ok && !i.needs_review);
+
+          showBatchResult({ ok: batchOk, items: allItems });
 
           // Reset only when every file succeeded without needs_review.
-          if (data.ok) {
+          if (batchOk) {
             form.reset();
             previewEl.classList.add("hidden");
             previewEl.innerHTML = "";
