@@ -334,19 +334,121 @@
     }
 
     /* --- Upload batch view --- */
+    .visually-hidden-file,
+    input[type="file"].visually-hidden-file {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      border: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+    }
+
+    .file-add-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      margin: 0;
+      padding: 11px 16px;
+      border: 1px dashed var(--primary);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--primary);
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .file-add-btn:hover { background: #f0f6ff; }
+    .file-add-btn:active { background: #e6efff; }
+
+    .file-hint {
+      margin: 8px 0 0;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
     .file-preview {
-      margin-top: 8px;
+      margin-top: 12px;
       font-size: 13px;
       color: var(--muted);
     }
 
+    .file-preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .file-preview .file-clear-btn {
+      width: auto;
+      padding: 2px 6px;
+      border: 0;
+      background: transparent;
+      color: var(--error-border);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .file-preview .file-clear-btn:hover {
+      background: transparent;
+      text-decoration: underline;
+    }
+
     .file-preview ul {
       margin: 0;
-      padding-left: 18px;
+      padding-left: 0;
+      list-style: none;
     }
 
     .file-preview li {
-      margin: 2px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .file-preview .file-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+
+    .file-preview .file-size {
+      flex: 0 0 auto;
+      color: var(--muted);
+    }
+
+    .file-preview .file-remove {
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .file-preview .file-remove:hover {
+      background: var(--error-bg);
+      color: var(--error-border);
     }
 
     .batch-summary {
@@ -440,7 +542,14 @@
 
         <div class="field">
           <label for="file">Файлы УПД (PDF или фото, можно несколько)</label>
-          <input type="file" id="file" name="files" accept="application/pdf,image/*" multiple required />
+          <input type="file" id="file" name="files" accept="application/pdf,image/*"
+                 multiple class="visually-hidden-file" />
+          <label for="file" class="file-add-btn">＋ Добавить файлы</label>
+          <p class="file-hint">
+            На некоторых телефонах (например, POCO/Xiaomi) галерея позволяет выбрать
+            только один файл за раз. В этом случае нажимайте «Добавить файлы»
+            несколько раз — выбранные файлы накапливаются в списке ниже.
+          </p>
           <div id="file-preview" class="file-preview hidden"></div>
         </div>
 
@@ -531,6 +640,17 @@
         // Revoked on each new submission to avoid memory leaks.
         let lastBlobUrls = new Map();
 
+        // Accumulated selection. The native picker on some Android ROMs
+        // (notably Xiaomi/POCO galleries) ignores `multiple` and returns one
+        // file per tap, so we never read fileInput.files directly on submit —
+        // instead every `change` APPENDS to this array and the input is reset,
+        // letting the bookkeeper build up a batch one tap at a time.
+        let selectedFiles = [];
+
+        function fileKey(f) {
+          return [f.name, f.size, f.lastModified || 0].join(" ");
+        }
+
         // Per-error-code copy that explains the validation failure to the user.
         // The pipeline error codes are also handled via the shared ERROR_MESSAGES.
         const FILE_ERROR_MESSAGES = Object.assign({}, ERROR_MESSAGES, {
@@ -546,20 +666,63 @@
         }
 
         function renderPreview() {
-          const files = fileInput.files;
-          if (!files || files.length === 0) {
+          if (selectedFiles.length === 0) {
             previewEl.classList.add("hidden");
             previewEl.innerHTML = "";
             return;
           }
-          const items = Array.from(files)
-            .map(f => `<li>${escape(f.name)} <span>(${formatBytes(f.size)})</span></li>`)
+          const items = selectedFiles
+            .map((f, i) =>
+              `<li>` +
+              `<span class="file-name">${escape(f.name)}</span>` +
+              `<span class="file-size">${formatBytes(f.size)}</span>` +
+              `<button type="button" class="file-remove" data-index="${i}" ` +
+              `aria-label="Удалить ${escape(f.name)}">✕</button>` +
+              `</li>`)
             .join("");
-          previewEl.innerHTML = `<p>Выбрано файлов: <strong>${files.length}</strong></p><ul>${items}</ul>`;
+          previewEl.innerHTML =
+            `<div class="file-preview-head">` +
+            `<span>Выбрано файлов: <strong>${selectedFiles.length}</strong></span>` +
+            `<button type="button" class="file-clear-btn" id="file-clear-all">Очистить всё</button>` +
+            `</div>` +
+            `<ul>${items}</ul>`;
           previewEl.classList.remove("hidden");
         }
 
-        fileInput.addEventListener("change", renderPreview);
+        // Append the just-picked files (dedup by name+size+mtime), then clear the
+        // input so the same file can be re-picked and the native control stays
+        // "empty" — the list below is the single source of truth.
+        function onFilesPicked() {
+          const picked = fileInput.files ? Array.from(fileInput.files) : [];
+          for (const f of picked) {
+            const key = fileKey(f);
+            if (!selectedFiles.some(s => fileKey(s) === key)) {
+              selectedFiles.push(f);
+            }
+          }
+          fileInput.value = "";
+          renderPreview();
+        }
+
+        fileInput.addEventListener("change", onFilesPicked);
+
+        // Remove one file or clear the whole list (event delegation: the list
+        // is re-rendered on every change so per-button listeners would go stale).
+        previewEl.addEventListener("click", function (e) {
+          const removeBtn = e.target.closest(".file-remove");
+          if (removeBtn) {
+            const idx = Number(removeBtn.getAttribute("data-index"));
+            if (!Number.isNaN(idx)) {
+              selectedFiles.splice(idx, 1);
+              renderPreview();
+            }
+            return;
+          }
+          if (e.target.closest("#file-clear-all")) {
+            selectedFiles = [];
+            renderPreview();
+          }
+        });
 
         function revokeBlobUrls() {
           for (const url of lastBlobUrls.values()) URL.revokeObjectURL(url);
@@ -700,7 +863,7 @@
           btn.disabled = true;
           btn.innerHTML = '<span class="spinner"></span>Обработка…';
 
-          const selected = fileInput.files ? Array.from(fileInput.files) : [];
+          const selected = selectedFiles.slice();
           if (selected.length === 0) {
             showResultRaw(`<h3>Не выбран файл</h3><p>Выберите хотя бы один файл УПД.</p>`, "error");
             btn.disabled = false;
@@ -773,8 +936,9 @@
           // Reset only when every file succeeded without needs_review.
           if (batchOk) {
             form.reset();
-            previewEl.classList.add("hidden");
-            previewEl.innerHTML = "";
+            selectedFiles = [];
+            fileInput.value = "";
+            renderPreview();
           }
 
           btn.disabled = false;
