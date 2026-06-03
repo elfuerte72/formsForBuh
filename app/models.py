@@ -192,7 +192,11 @@ class SheetUPDRow(_Base):
     source_row: int = Field(description="1-based row index inside the spreadsheet")
 
 
-ReconStatus = Literal["OK", "NO", "ЛИШНЕЕ"]
+# OK     — номер совпал и суммы сходятся;
+# СУММА? — номер совпал, но сумма 1С ≠ сумма прораба (вероятна ошибка распознавания);
+# NO     — документ есть в 1С, но прораб его ещё не загрузил;
+# ЛИШНЕЕ — прораб загрузил документ, которого нет в реестре 1С.
+ReconStatus = Literal["OK", "СУММА?", "NO", "ЛИШНЕЕ"]
 
 
 class ReconRow(_Base):
@@ -222,6 +226,8 @@ class ReconciliationStats(_Base):
     matched: int = Field(ge=0)
     missing: int = Field(ge=0)
     extras: int = Field(ge=0)
+    # Number matched but the 1С amount differs from the foreman amount.
+    amount_mismatch: int = Field(default=0, ge=0)
 
 
 class ReconciliationResult(_Base):

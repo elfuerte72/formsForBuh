@@ -9,7 +9,7 @@ import pytest
 
 from app.core.errors import OneCParseError, SheetsAppendError, SheetsReadError
 from app.models import OneCRecord, SheetUPDRow
-from app.pipelines.reconciliation import reconcile
+from app.pipelines.reconciliation import pending_uploads, reconcile
 
 
 def _onec(upd_number: str, **overrides) -> OneCRecord:
@@ -153,6 +153,76 @@ async def test_foreman_duplicates_produce_multiple_ok_rows() -> None:
     assert len(ok_rows) == 2
     assert {r.green_foreman for r in ok_rows} == {"Юра", "Гриша"}
     assert result.stats.matched == 2
+
+
+@pytest.mark.asyncio
+async def test_amount_mismatch_flags_summa_status_not_ok() -> None:
+    """Same number, different amount → СУММА? row + amount_mismatch count."""
+    onec, sheets = _services(
+        onec_records=[_onec("U-1", amount=15888.0)],
+        sheet_rows=[_sheet("U-1", amount=15348.0)],
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    assert result.stats.matched == 0
+    assert result.stats.amount_mismatch == 1
+    assert result.stats.missing == 0
+    assert result.stats.extras == 0
+
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    row = next(r for r in written if r.status == "СУММА?")
+    assert row.onec_amount == 15888.0
+    assert row.green_amount == 15348.0
+    assert row.onec_upd_number == "U-1" and row.green_upd_number == "U-1"
+
+
+@pytest.mark.asyncio
+async def test_amount_within_tolerance_stays_ok() -> None:
+    onec, sheets = _services(
+        onec_records=[_onec("U-1", amount=100.00)],
+        sheet_rows=[_sheet("U-1", amount=100.009)],  # < 0.01 gap
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    assert result.stats.matched == 1
+    assert result.stats.amount_mismatch == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_amount_does_not_flag_mismatch() -> None:
+    onec, sheets = _services(
+        onec_records=[_onec("U-1", amount=None)],
+        sheet_rows=[_sheet("U-1", amount=500.0)],
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    assert result.stats.matched == 1
+    assert result.stats.amount_mismatch == 0
+
+
+@pytest.mark.asyncio
+async def test_pending_uploads_counts_rows_without_status() -> None:
+    sheets = MagicMock()
+    sheets.read_all_records = AsyncMock(
+        return_value=[
+            _sheet("U-1", status=None),       # fresh upload
+            _sheet("U-2", status=""),         # fresh upload (empty string)
+            _sheet("U-3", status="OK"),       # already reconciled
+        ]
+    )
+    count = await pending_uploads(sheets=sheets, correlation_id="cid")
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_pending_uploads_returns_zero_on_read_error() -> None:
+    sheets = MagicMock()
+    sheets.read_all_records = AsyncMock(side_effect=SheetsReadError("api down"))
+    count = await pending_uploads(sheets=sheets, correlation_id="cid")
+    assert count == 0
 
 
 @pytest.mark.asyncio

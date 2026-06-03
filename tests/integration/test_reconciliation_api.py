@@ -104,7 +104,12 @@ async def test_accept_xls_returns_summary(client, fake_onec, fake_sheets):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["stats"] == {"matched": 1, "missing": 1, "extras": 0}
+    assert body["stats"] == {
+        "matched": 1,
+        "missing": 1,
+        "extras": 0,
+        "amount_mismatch": 0,
+    }
     # The diff is written into the sheet, not returned in the response.
     assert "missing" not in body
     assert "duplicates" not in body
@@ -116,6 +121,52 @@ async def test_accept_xls_returns_summary(client, fake_onec, fake_sheets):
     statuses = [r.status for r in written_rows]
     assert statuses.count("OK") == 1
     assert statuses.count("NO") == 1
+
+
+@pytest.mark.asyncio
+async def test_amount_mismatch_counted_and_flagged(client, fake_onec, fake_sheets):
+    # Same UPD number on both sides, but the foreman amount differs from 1С.
+    fake_sheets.read_all_records = AsyncMock(
+        return_value=[
+            SheetUPDRow(
+                upd_number="6022461056",
+                organization="СТРОИТЕЛЬНЫЙ ДВОР ООО",
+                date=date(2026, 2, 5),
+                amount=21000.0,  # 1С fixture says 21324.0
+                foreman="Юра",
+                source_row=2,
+            ),
+        ]
+    )
+    async with client as c:
+        resp = await c.post("/api/reconciliation", files=_xls_payload())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["stats"]["matched"] == 0
+    assert body["stats"]["amount_mismatch"] == 1
+    written_rows = fake_sheets.rewrite_reconciliation.await_args.args[0]
+    statuses = [r.status for r in written_rows]
+    assert statuses.count("СУММА?") == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_endpoint_counts_unreconciled(client, fake_sheets):
+    # The fixture's single green row has status=None → one pending upload.
+    async with client as c:
+        resp = await c.get("/api/reconciliation/pending")
+    assert resp.status_code == 200
+    assert resp.json() == {"pending": 1}
+    fake_sheets.read_all_records.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pending_endpoint_zero_on_read_error(client, fake_sheets):
+    fake_sheets.read_all_records = AsyncMock(side_effect=SheetsReadError("api 503"))
+    async with client as c:
+        resp = await c.get("/api/reconciliation/pending")
+    assert resp.status_code == 200
+    assert resp.json() == {"pending": 0}
 
 
 @pytest.mark.asyncio

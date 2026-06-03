@@ -219,10 +219,6 @@
       margin-bottom: 20px;
     }
 
-    .stats-grid.stats-grid-3 {
-      grid-template-columns: repeat(3, 1fr);
-    }
-
     .stat-card {
       background: #f8fafc;
       border: 1px solid var(--border);
@@ -563,6 +559,7 @@
     <!-- TAB: RECONCILIATION                                            -->
     <!-- ============================================================== -->
     <section id="tab-reconciliation" class="hidden" role="tabpanel">
+      <div id="reconciliation-pending" class="banner warn hidden" style="margin-top:0;"></div>
       <form id="reconciliation-form">
         <div class="field">
           <label for="reconciliation-file">Реестр 1С (.xls / .xlsx / .csv)</label>
@@ -955,6 +952,7 @@
         const form = document.getElementById("reconciliation-form");
         const btn = document.getElementById("reconciliation-btn");
         const resultEl = document.getElementById("reconciliation-result");
+        const pendingEl = document.getElementById("reconciliation-pending");
 
         function showBanner(html, kind) {
           resultEl.className = "banner " + kind;
@@ -1024,31 +1022,76 @@
             return;
           }
 
-          const stats = data.stats || { matched: 0, missing: 0, extras: 0 };
-          const bannerKind = stats.missing === 0 && stats.extras === 0 ? "success" : "warn";
-          const bannerTitle = bannerKind === "success"
-            ? "Сводка готова — расхождений нет"
-            : "Сводка готова — есть расхождения";
+          const stats = data.stats || { matched: 0, missing: 0, extras: 0, amount_mismatch: 0 };
+          const mismatch = stats.amount_mismatch || 0;
+          const hasIssue = stats.missing > 0 || stats.extras > 0 || mismatch > 0;
+          const bannerKind = hasIssue ? "warn" : "success";
+          const bannerTitle = hasIssue
+            ? "Сводка готова — есть расхождения"
+            : "Сводка готова — расхождений нет";
           const matchedKind = stats.matched > 0 ? "success" : "";
           const missingKind = stats.missing > 0 ? "warn" : "";
           const extrasKind = stats.extras > 0 ? "warn" : "";
+          const mismatchKind = mismatch > 0 ? "warn" : "";
 
           const html =
             `<div class="banner ${bannerKind}" style="margin-top:0;">` +
             `<h3>${bannerTitle}</h3>` +
             `<p>Полная таблица обновлена в Google Sheet.</p>` +
             `</div>` +
-            `<div class="stats-grid stats-grid-3">` +
+            `<div class="stats-grid">` +
             statCard("Совпало", stats.matched, matchedKind) +
             statCard("Не хватает", stats.missing, missingKind) +
             statCard("Лишние", stats.extras, extrasKind) +
+            statCard("Сумма ≠", mismatch, mismatchKind) +
             `</div>` +
             `<p class="meta">correlation_id: ${escape(data.correlation_id || "")}</p>`;
 
           showSummary(html);
+          // The sheet was just rebuilt: every upload now carries a status, so
+          // the "несведённые загрузки" hint no longer applies.
+          pendingEl.classList.add("hidden");
           btn.disabled = false;
           btn.textContent = "Сравнить";
         }
+
+        // --- несведённые загрузки --------------------------------------------
+        // Foreman uploads land as green-only rows below the last reconciliation
+        // output (gspread appends after the last filled row). They stay there,
+        // unpaired, until the next «Сравнить». This hint tells the bookkeeper
+        // there is un-reconciled work waiting.
+        function pluralUpd(n) {
+          const a = Math.abs(n) % 100, b = a % 10;
+          if (a > 10 && a < 20) return "документов";
+          if (b === 1) return "документ";
+          if (b >= 2 && b <= 4) return "документа";
+          return "документов";
+        }
+
+        async function refreshPending() {
+          let n = 0;
+          try {
+            const r = await fetch("/api/reconciliation/pending");
+            if (!r.ok) { pendingEl.classList.add("hidden"); return; }
+            const d = await r.json();
+            n = (d && d.pending) || 0;
+          } catch (_) {
+            pendingEl.classList.add("hidden");
+            return;
+          }
+          if (n > 0) {
+            pendingEl.innerHTML =
+              `<h3>Есть несведённые загрузки</h3>` +
+              `<p>Прорабы загрузили ${n} ${pluralUpd(n)} после последней сводки. ` +
+              `Нажмите «Сравнить» с актуальной выгрузкой 1С, чтобы обновить таблицу.</p>`;
+            pendingEl.classList.remove("hidden");
+          } else {
+            pendingEl.classList.add("hidden");
+          }
+        }
+
+        const reconTabBtn = document.querySelector('.tab-button[data-tab="reconciliation"]');
+        if (reconTabBtn) reconTabBtn.addEventListener("click", refreshPending);
 
         form.addEventListener("submit", submit);
       })();

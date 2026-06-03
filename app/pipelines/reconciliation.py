@@ -55,6 +55,7 @@ async def reconcile(
                 matched=stats.matched,
                 missing=stats.missing,
                 extras=stats.extras,
+                amount_mismatch=stats.amount_mismatch,
             )
 
             await sheets.rewrite_reconciliation(recon_rows)
@@ -103,6 +104,31 @@ async def reconcile(
             )
 
 
+async def pending_uploads(
+    *,
+    sheets: SheetsService,
+    correlation_id: str,
+) -> int:
+    """Count foreman uploads that have not been reconciled yet.
+
+    A fresh :meth:`SheetsService.append_row` writes a green-only row and leaves
+    the Status column empty; reconciliation always stamps a status. So a green
+    row with an empty status is an upload that landed *after* the last «Сводка»
+    and is not yet paired with its 1С counterpart. Read failures degrade to
+    ``0`` — the hint is advisory, never a hard error.
+    """
+    with bind_correlation_id(correlation_id):
+        try:
+            rows = await sheets.read_all_records()
+        except AppError as exc:
+            # Any read / worksheet-open failure → no hint rather than an error.
+            log.warning("reconcile.pending_read_failed", error=str(exc))
+            return 0
+        pending = sum(1 for row in rows if not row.status)
+        log.info("reconcile.pending", pending=pending, total=len(rows))
+        return pending
+
+
 # --- diff -------------------------------------------------------------------
 
 
@@ -138,6 +164,7 @@ def _diff(
     matched_keys: set[str] = set()
     rows: list[ReconRow] = []
     matched = 0
+    amount_mismatch = 0
     extras = 0
 
     foreman_by_key: dict[str, list[SheetUPDRow]] = defaultdict(list)
@@ -152,8 +179,20 @@ def _diff(
         if onec_rec is not None:
             matched_keys.add(key)
             for row in group:
-                rows.append(_make_ok_row(onec_rec, row))
-                matched += 1
+                recon_row = _make_matched_row(onec_rec, row)
+                rows.append(recon_row)
+                if recon_row.status == "OK":
+                    matched += 1
+                else:  # "СУММА?" — number matched but amounts diverge.
+                    amount_mismatch += 1
+                    log.info(
+                        "reconcile.amount_mismatch",
+                        key=key,
+                        onec_amount=onec_rec.amount,
+                        green_amount=row.amount,
+                        onec_row=onec_rec.source_row,
+                        green_row=row.source_row,
+                    )
         else:
             for row in group:
                 rows.append(_make_extra_row(row))
@@ -168,18 +207,31 @@ def _diff(
         no_rows.append(_make_no_row(rec))
         missing += 1
 
-    # Order: foreman uploads (OK + ЛИШНЕЕ) on top in the order they appeared
-    # in the sheet (preserves source_row), NO rows last so the "still missing"
-    # list sits in its own block at the bottom.
-    sorted_rows = [r for r in rows if r.status in ("OK", "ЛИШНЕЕ")] + no_rows
+    # Order: foreman uploads (OK / СУММА? / ЛИШНЕЕ) on top in the order they
+    # appeared in the sheet (preserves source_row), NO rows last so the "still
+    # missing" list sits in its own block at the bottom. ``rows`` never holds a
+    # NO row by construction; the filter just makes the intent explicit.
+    sorted_rows = [r for r in rows if r.status != "NO"] + no_rows
 
-    stats = ReconciliationStats(matched=matched, missing=missing, extras=extras)
+    stats = ReconciliationStats(
+        matched=matched,
+        missing=missing,
+        extras=extras,
+        amount_mismatch=amount_mismatch,
+    )
     return sorted_rows, stats
 
 
-def _make_ok_row(onec_rec: OneCRecord, foreman_row: SheetUPDRow) -> ReconRow:
+def _make_matched_row(onec_rec: OneCRecord, foreman_row: SheetUPDRow) -> ReconRow:
+    """Pair a 1С record with a foreman upload that shares its UPD number.
+
+    Status is ``OK`` when the amounts agree (within :data:`_AMOUNT_TOLERANCE`)
+    and ``СУММА?`` when they diverge — the number matched but one side's amount
+    was likely misread, so the bookkeeper should eyeball it.
+    """
+    status = "OK" if _amounts_agree(onec_rec.amount, foreman_row.amount) else "СУММА?"
     return ReconRow(
-        status="OK",
+        status=status,
         onec_date=onec_rec.date,
         onec_counterparty=onec_rec.organization,
         onec_amount=onec_rec.amount,
@@ -215,6 +267,22 @@ def _make_extra_row(foreman_row: SheetUPDRow) -> ReconRow:
         green_foreman=foreman_row.foreman,
         green_uploaded_at=foreman_row.uploaded_at,
     )
+
+
+# Amounts are rubles with kopecks; a 1-kopeck gap is float noise, not a real
+# discrepancy. Anything larger is flagged as «СУММА?».
+_AMOUNT_TOLERANCE = 0.01
+
+
+def _amounts_agree(onec_amount: float | None, green_amount: float | None) -> bool:
+    """True when the two amounts match within tolerance.
+
+    If either side is missing we cannot judge a discrepancy, so we treat it as
+    agreeing — a missing amount is a separate problem (caught at upload time).
+    """
+    if onec_amount is None or green_amount is None:
+        return True
+    return abs(onec_amount - green_amount) <= _AMOUNT_TOLERANCE
 
 
 def _normalize(value: str | None) -> str:
