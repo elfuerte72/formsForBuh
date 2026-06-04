@@ -585,6 +585,7 @@
         onec_parse_error: "Не удалось разобрать выгрузку 1С. Проверьте формат файла (.xls / .xlsx / .csv) и колонки «Номер вх.», «Дата (вх.)», «Сумма».",
         sheets_read_error: "Не удалось прочитать таблицу прорабов. Сообщите администратору.",
         sheets_write_error: "Не удалось записать сводку в Google Sheet. Сообщите администратору.",
+        reconciliation_disabled: "Сверка временно отключена. Сейчас форма работает только на загрузку УПД.",
         app_error: "Внутренняя ошибка приложения.",
         unexpected_error: "Произошла непредвиденная ошибка."
       };
@@ -607,6 +608,12 @@
           .replace(/'/g, "&#39;");
       }
 
+      // ----- reconciliation paused (этап 1) -----
+      // Сверка временно отключена — форма только грузит УПД, реестр копится и
+      // ничего не затирается. Чтобы вернуть вкладку «Сводка»: поставь здесь
+      // RECON_ENABLED = true И reconciliation_enabled=true в окружении бэкенда.
+      const RECON_ENABLED = false;
+
       // ----- tabs -----
       const tabButtons = document.querySelectorAll(".tab-button");
       const panels = {
@@ -622,6 +629,19 @@
           });
         });
       });
+
+      if (!RECON_ENABLED) {
+        // Hide the «Сводка» tab + its panel; with a single tab the bar is
+        // pointless, so collapse it and simplify the subtitle. Markup stays in
+        // the DOM (just hidden) so re-enabling is a one-line flip.
+        const reconBtn = document.querySelector('.tab-button[data-tab="reconciliation"]');
+        if (reconBtn) reconBtn.classList.add("hidden");
+        if (panels.reconciliation) panels.reconciliation.classList.add("hidden");
+        const tabsBar = document.querySelector(".tabs");
+        if (tabsBar) tabsBar.classList.add("hidden");
+        const subtitle = document.querySelector(".subtitle");
+        if (subtitle) subtitle.textContent = "Загрузка УПД.";
+      }
 
       // ============================================================
       // UPLOAD form (multi-file batch)
@@ -949,6 +969,7 @@
       // RECONCILIATION form
       // ============================================================
       (function initReconciliation() {
+        if (!RECON_ENABLED) return;  // сверка на паузе — форму не активируем
         const form = document.getElementById("reconciliation-form");
         const btn = document.getElementById("reconciliation-btn");
         const resultEl = document.getElementById("reconciliation-result");

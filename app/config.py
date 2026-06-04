@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(25 * 1024 * 1024, description="Hard cap on uploaded file size")
     max_batch_files: int = Field(10, description="Maximum number of files per /api/upload request")
     http_timeout_seconds: float = Field(30.0, description="httpx timeout for outbound calls")
+    # Stage 1 only uploads УПД; reconciliation (the destructive clear+rewrite of
+    # the sheet) is paused until the multi-organisation rework (stages 2-3).
+    # While False, /api/reconciliation never touches the sheet and the «Сводка»
+    # tab is hidden, so the foreman upload register can only grow.
+    reconciliation_enabled: bool = Field(
+        False, description="Enable the 1С reconciliation tab + endpoints"
+    )
 
     @cached_property
     def sheet_url(self) -> str:

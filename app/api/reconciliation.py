@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.deps import get_onec_parser_service, get_sheets_service
+from app.models import ReconciliationResult
 from app.pipelines.reconciliation import pending_uploads, reconcile
 from app.services.onec import OneCParserService
 from app.services.sheets import SheetsService
@@ -37,6 +38,17 @@ async def reconcile_endpoint(
 ) -> dict[str, object]:
     """Accept the 1С export, run the reconciliation pipeline, return the diff."""
     correlation_id = uuid.uuid4().hex
+
+    # Reconciliation is paused (stage 1): bail out BEFORE reading the file or
+    # touching the sheet so the destructive clear+rewrite can never run. The
+    # foreman upload register stays append-only.
+    if not settings.reconciliation_enabled:
+        log.info("reconciliation.disabled", correlation_id=correlation_id)
+        return ReconciliationResult(
+            ok=False,
+            correlation_id=correlation_id,
+            error="reconciliation_disabled",
+        ).model_dump(mode="json")
 
     if not file.filename:
         raise HTTPException(
@@ -107,13 +119,17 @@ async def reconcile_endpoint(
 @router.get("/api/reconciliation/pending", status_code=status.HTTP_200_OK)
 async def pending_endpoint(
     sheets: Annotated[SheetsService, Depends(get_sheets_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, int]:
     """Count foreman uploads that arrived after the last «Сводка» run.
 
     Powers the «несведённые загрузки» hint on the reconciliation tab. Always
     returns ``200`` with a count (``0`` on any read failure) so the frontend
-    can fire-and-forget it without error handling.
+    can fire-and-forget it without error handling. While reconciliation is
+    paused the hint is meaningless, so we short-circuit to ``0``.
     """
+    if not settings.reconciliation_enabled:
+        return {"pending": 0}
     correlation_id = uuid.uuid4().hex
     count = await pending_uploads(sheets=sheets, correlation_id=correlation_id)
     return {"pending": count}

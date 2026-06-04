@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+from app.config import get_settings
 from app.core.errors import OneCParseError, SheetsReadError
 from app.deps import get_onec_parser_service, get_sheets_service
 from app.main import app as real_app
@@ -22,6 +23,18 @@ from app.models import OneCRecord, SheetUPDRow
 
 
 FIXTURE_XLS = Path(__file__).resolve().parents[1] / "fixtures" / "onec" / "sample.xls"
+
+
+@pytest.fixture(autouse=True)
+def _enable_reconciliation(monkeypatch):
+    """Stage-1 default is paused; most tests here exercise the ENABLED behaviour.
+
+    Individual tests flip ``RECONCILIATION_ENABLED`` back to ``false`` (and
+    clear the settings cache) to assert the paused path.
+    """
+    monkeypatch.setenv("RECONCILIATION_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
 
 
 @asynccontextmanager
@@ -75,6 +88,8 @@ def fake_sheets():
             ),
         ]
     )
+    # No register rows carried over from earlier reconciliations by default.
+    svc.read_onec_records = AsyncMock(return_value=[])
     svc.rewrite_reconciliation = AsyncMock(return_value=None)
     return svc
 
@@ -167,6 +182,38 @@ async def test_pending_endpoint_zero_on_read_error(client, fake_sheets):
         resp = await c.get("/api/reconciliation/pending")
     assert resp.status_code == 200
     assert resp.json() == {"pending": 0}
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_disabled_never_touches_sheet(
+    client, fake_onec, fake_sheets, monkeypatch
+):
+    """Paused (stage 1): the endpoint short-circuits BEFORE any sheet access."""
+    monkeypatch.setenv("RECONCILIATION_ENABLED", "false")
+    get_settings.cache_clear()
+    async with client as c:
+        resp = await c.post("/api/reconciliation", files=_xls_payload())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "reconciliation_disabled"
+    # Nothing parsed, nothing read, nothing rewritten — register stays intact.
+    fake_onec.parse.assert_not_called()
+    fake_sheets.read_all_records.assert_not_awaited()
+    fake_sheets.rewrite_reconciliation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_disabled_returns_zero_without_read(
+    client, fake_sheets, monkeypatch
+):
+    monkeypatch.setenv("RECONCILIATION_ENABLED", "false")
+    get_settings.cache_clear()
+    async with client as c:
+        resp = await c.get("/api/reconciliation/pending")
+    assert resp.status_code == 200
+    assert resp.json() == {"pending": 0}
+    fake_sheets.read_all_records.assert_not_awaited()
 
 
 @pytest.mark.asyncio

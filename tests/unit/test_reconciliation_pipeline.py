@@ -44,6 +44,7 @@ def _services(
     *,
     onec_records=None,
     sheet_rows=None,
+    existing_onec=None,
     onec_exc=None,
     sheets_exc=None,
     rewrite_exc=None,
@@ -59,6 +60,7 @@ def _services(
         sheets.read_all_records = AsyncMock(side_effect=sheets_exc)
     else:
         sheets.read_all_records = AsyncMock(return_value=sheet_rows or [])
+    sheets.read_onec_records = AsyncMock(return_value=existing_onec or [])
     if rewrite_exc is not None:
         sheets.rewrite_reconciliation = AsyncMock(side_effect=rewrite_exc)
     else:
@@ -237,6 +239,61 @@ async def test_normalization_matches_padding_and_spaces() -> None:
     assert result.stats.matched == 1
     assert result.stats.missing == 0
     assert result.stats.extras == 0
+
+
+@pytest.mark.asyncio
+async def test_previous_register_records_are_carried_over() -> None:
+    """Old 1С entries absent from the new export survive as NO rows.
+
+    Regression: the bookkeeper's weekly export may only cover a recent window;
+    a naive rewrite would wipe register rows from earlier reconciliations.
+    """
+    onec, sheets = _services(
+        onec_records=[_onec("U-2")],                  # new export carries only U-2
+        sheet_rows=[],                                 # foreman uploaded nothing
+        existing_onec=[_onec("U-1", source_row=2)],   # U-1 seen last week
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    assert {r.onec_upd_number for r in written} == {"U-1", "U-2"}
+    assert all(r.status == "NO" for r in written)
+    assert result.stats.missing == 2
+
+
+@pytest.mark.asyncio
+async def test_carried_over_register_record_matches_fresh_upload() -> None:
+    """A foreman upload pairs with a register row carried over from last week."""
+    onec, sheets = _services(
+        onec_records=[],                               # nothing in the new export
+        sheet_rows=[_sheet("U-1")],                    # foreman uploaded U-1 now
+        existing_onec=[_onec("U-1", source_row=2)],    # U-1 was in an earlier export
+    )
+    result = await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    assert [r.status for r in written] == ["OK"]
+    assert result.stats.matched == 1
+    assert result.stats.missing == 0
+
+
+@pytest.mark.asyncio
+async def test_new_register_overrides_old_on_key_clash() -> None:
+    """When a number appears in both, the fresh export wins (corrected amount)."""
+    onec, sheets = _services(
+        onec_records=[_onec("U-1", amount=200.0)],            # corrected amount
+        sheet_rows=[],
+        existing_onec=[_onec("U-1", amount=100.0, source_row=2)],
+    )
+    await reconcile(
+        raw=b"x", filename="r.xls", onec=onec, sheets=sheets, correlation_id="cid"
+    )
+    written = sheets.rewrite_reconciliation.await_args.args[0]
+    u1_rows = [r for r in written if r.onec_upd_number == "U-1"]
+    assert len(u1_rows) == 1
+    assert u1_rows[0].onec_amount == 200.0
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,11 @@ clicks «Сравнить», the pipeline computes a side-by-side diff, **rewrit
 data area of the Google Sheet** with paired yellow/green rows and a
 ``OK / NO / ЛИШНЕЕ`` status, and returns only the high-level counts. The
 form is intentionally minimal — the actual list lives in the spreadsheet.
+
+Register entries accumulate across reconciliations: before diffing, the
+pipeline reads the 1С rows already in the sheet and merges them with the new
+export (:func:`_combine_onec`), so an export covering only a recent window
+never wipes register rows seen in earlier weeks.
 """
 
 from __future__ import annotations
@@ -49,7 +54,16 @@ async def reconcile(
             sheet_rows = await sheets.read_all_records()
             log.info("reconcile.read_sheet", rows=len(sheet_rows))
 
-            recon_rows, stats = _diff(onec_records, sheet_rows)
+            existing_onec = await sheets.read_onec_records()
+            combined_onec = _combine_onec(new=onec_records, existing=existing_onec)
+            log.info(
+                "reconcile.merged_onec",
+                new=len(onec_records),
+                existing=len(existing_onec),
+                carried_over=len(combined_onec) - len(onec_records),
+            )
+
+            recon_rows, stats = _diff(combined_onec, sheet_rows)
             log.info(
                 "reconcile.diff",
                 matched=stats.matched,
@@ -127,6 +141,33 @@ async def pending_uploads(
         pending = sum(1 for row in rows if not row.status)
         log.info("reconcile.pending", pending=pending, total=len(rows))
         return pending
+
+
+# --- merge ------------------------------------------------------------------
+
+
+def _combine_onec(
+    *, new: list[OneCRecord], existing: list[OneCRecord]
+) -> list[OneCRecord]:
+    """Merge a freshly parsed register with the one already in the sheet.
+
+    The 1С register the bookkeeper exports may only cover a recent window, so a
+    naive rewrite would drop every register entry that fell out of that window.
+    To preserve history we carry previously-seen register rows forward: a new
+    record wins on a key clash (the fresh export is authoritative — an amount may
+    have been corrected), and any old record whose number is absent from the new
+    export is kept unchanged. Matching key is :func:`_normalize` on both sides;
+    new records stay first so :func:`_diff` (first-wins) keeps the fresh copy.
+    """
+    new_keys = {_normalize(rec.upd_number) for rec in new}
+    new_keys.discard("")
+    combined = list(new)
+    for rec in existing:
+        key = _normalize(rec.upd_number)
+        if not key or key in new_keys:
+            continue
+        combined.append(rec)
+    return combined
 
 
 # --- diff -------------------------------------------------------------------

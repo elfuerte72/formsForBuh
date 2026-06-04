@@ -193,6 +193,45 @@ def test_read_all_records_skips_rows_without_green_upd(mock_worksheet):
     assert [r.upd_number for r in rows] == ["U-2"]
 
 
+def test_read_onec_records_reads_yellow_block(mock_worksheet):
+    # Yellow block A..D is the 1С side left by the previous reconciliation.
+    mock_worksheet.get_all_values.return_value = [
+        list(COLUMNS),
+        # OK row: yellow + green filled — yellow read.
+        [
+            "2026-04-22", "ООО Поставщик", "12345.67", "UPD-1",
+            "UPD-1", "2026-04-22", "12345.67", 'ООО "Тест"', "Гринлайн", "Юра",
+            "2026-04-22T10:00:00+00:00", "OK",
+        ],
+        # NO row: yellow only — yellow read.
+        ["2026-04-23", "ООО Другой", "500", "UPD-3", "", "", "", "", "", "", "", "NO"],
+        # ЛИШНЕЕ row: yellow empty → skipped.
+        ["", "", "", "", "X-9", "2026-04-24", "50", "ООО", "", "Боря", "", "ЛИШНЕЕ"],
+    ]
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    rows = svc.read_onec_records_sync()
+
+    assert [r.upd_number for r in rows] == ["UPD-1", "UPD-3"]
+    assert rows[0].organization == "ООО Поставщик"
+    assert rows[0].date == date(2026, 4, 22)
+    assert rows[0].amount == 12345.67
+    assert rows[0].source_row == 2
+    assert rows[1].upd_number == "UPD-3"
+    assert rows[1].amount == 500.0
+    assert rows[1].source_row == 3
+
+
+def test_read_onec_records_translates_api_error(mock_worksheet):
+    fake_response = MagicMock()
+    fake_response.status_code = 500
+    fake_response.json.return_value = {"error": {"code": 500, "message": "boom"}}
+    mock_worksheet.get_all_values.side_effect = gspread.exceptions.APIError(fake_response)
+
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    with pytest.raises(SheetsReadError):
+        svc.read_onec_records_sync()
+
+
 def test_read_all_records_translates_api_error(mock_worksheet):
     fake_response = MagicMock()
     fake_response.status_code = 500

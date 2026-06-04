@@ -16,7 +16,7 @@ from google.oauth2.service_account import Credentials
 
 from app.core.errors import SheetsAppendError, SheetsReadError
 from app.core.logging import get_logger
-from app.models import ReconRow, SheetUPDRow, UPDRecord
+from app.models import OneCRecord, ReconRow, SheetUPDRow, UPDRecord
 
 log = get_logger("sheets")
 
@@ -160,6 +160,42 @@ class SheetsService:
         log.info("sheets.read.done", rows=len(rows))
         return rows
 
+    async def read_onec_records(self) -> list[OneCRecord]:
+        """Async wrapper over :meth:`read_onec_records_sync`."""
+        return await asyncio.to_thread(self.read_onec_records_sync)
+
+    def read_onec_records_sync(self) -> list[OneCRecord]:
+        """Read every 1С (yellow-block) record currently in the worksheet.
+
+        These are the register entries left by previous reconciliations: ``OK`` /
+        ``СУММА?`` / ``NO`` rows carry yellow data, ``ЛИШНЕЕ`` rows do not. The
+        reconciliation pipeline merges them with a freshly uploaded register so
+        old register entries are never dropped just because they fell out of the
+        new export. Skips the header and any row whose yellow ``№ УПД`` (column D)
+        is empty. SDK errors are translated into :class:`SheetsReadError`.
+        """
+        log.info("sheets.read_onec.start", sheet_id=self._sheet_id)
+        worksheet = self._get_worksheet()
+        try:
+            raw = worksheet.get_all_values()
+        except gspread.exceptions.APIError as exc:
+            log.warning("sheets.read_onec.api_error", error=str(exc))
+            raise SheetsReadError(f"Google Sheets API error: {exc}") from exc
+        except Exception as exc:  # pragma: no cover - defensive
+            log.exception("sheets.read_onec.unexpected")
+            raise SheetsReadError(f"Unexpected error reading sheet: {exc}") from exc
+
+        rows: list[OneCRecord] = []
+        # Row 0 is the human-managed header; data starts at row 1.
+        for idx, values in enumerate(raw[1:], start=2):
+            row = _row_to_onec(values, source_row=idx)
+            if row is None:
+                continue
+            rows.append(row)
+
+        log.info("sheets.read_onec.done", rows=len(rows))
+        return rows
+
     async def rewrite_reconciliation(self, rows: list[ReconRow]) -> None:
         """Async wrapper over :meth:`rewrite_reconciliation_sync`."""
         await asyncio.to_thread(self.rewrite_reconciliation_sync, rows)
@@ -292,6 +328,30 @@ def _row_to_sheet_upd(values: list[str], *, source_row: int) -> SheetUPDRow | No
         foreman=_at(9) or None,               # J — Прораб
         uploaded_at=_at(10) or None,          # K — Дата загрузки
         status=_at(11) or None,               # L — Статус
+        source_row=source_row,
+    )
+
+
+def _row_to_onec(values: list[str], *, source_row: int) -> OneCRecord | None:
+    """Convert a sheet row into an :class:`OneCRecord` from the YELLOW block.
+
+    Reads columns A..D (date, counterparty, amount, № УПД) — the 1С side written
+    by the previous reconciliation. Rows without a yellow ``№ УПД`` are skipped:
+    those are ``ЛИШНЕЕ`` rows (green only) or genuinely empty.
+    """
+
+    def _at(idx: int) -> str:
+        return values[idx].strip() if idx < len(values) and values[idx] else ""
+
+    upd_number = _at(3)  # D — № УПД (1С)
+    if not upd_number:
+        return None
+
+    return OneCRecord(
+        upd_number=upd_number,
+        date=_parse_iso_date(_at(0)),     # A — Дата (1С)
+        organization=_at(1) or None,      # B — Контрагент (1С)
+        amount=_parse_amount(_at(2)),     # C — Сумма (1С)
         source_row=source_row,
     )
 
