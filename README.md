@@ -83,7 +83,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `MAX_IMAGE_DPI` | DPI растеризации PDF (default 200) |
 | `MAX_UPLOAD_BYTES` | Лимит размера файла (default 25 МБ) |
 | `HTTP_TIMEOUT_SECONDS` | Таймаут httpx (default 30) |
-| `RECONCILIATION_ENABLED` | Вкладка «Сводка» + эндпоинты сверки (default `false`) |
+| `RECONCILIATION_ENABLED` | Вкладка «Сводка» + эндпоинты сверки (default `true`; `false` — пауза). Фронт читает флаг через `GET /api/config` |
 | `DRIVE_ENABLED` | Архивация скана в Google Drive (default `false`) |
 | `DRIVE_FOLDER_ID` | ID папки в вашем Drive, куда складывать сканы |
 | `DRIVE_OAUTH_CLIENT_ID` / `DRIVE_OAUTH_CLIENT_SECRET` / `DRIVE_OAUTH_REFRESH_TOKEN` | OAuth-доступ для заливки (см. ниже) |

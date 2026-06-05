@@ -37,12 +37,13 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(25 * 1024 * 1024, description="Hard cap on uploaded file size")
     max_batch_files: int = Field(10, description="Maximum number of files per /api/upload request")
     http_timeout_seconds: float = Field(30.0, description="httpx timeout for outbound calls")
-    # Stage 1 only uploads УПД; reconciliation (the destructive clear+rewrite of
-    # the sheet) is paused until the multi-organisation rework (stages 2-3).
-    # While False, /api/reconciliation never touches the sheet and the «Сводка»
-    # tab is hidden, so the foreman upload register can only grow.
+    # Reconciliation is now non-destructive (annotate-in-place, preserves manual
+    # statuses) and enabled by default. This single flag is the source of truth:
+    # the frontend reads it via GET /api/config to show/hide the «Сводка» tab,
+    # and /api/reconciliation short-circuits when it's off. Set
+    # RECONCILIATION_ENABLED=false to pause it without touching the sheet.
     reconciliation_enabled: bool = Field(
-        False, description="Enable the 1С reconciliation tab + endpoints"
+        True, description="Enable the 1С reconciliation tab + endpoints"
     )
 
     # --- Google Drive archival ----------------------------------------------

@@ -613,11 +613,10 @@
           .replace(/'/g, "&#39;");
       }
 
-      // ----- reconciliation paused (этап 1) -----
-      // Сверка временно отключена — форма только грузит УПД, реестр копится и
-      // ничего не затирается. Чтобы вернуть вкладку «Сводка»: поставь здесь
-      // RECON_ENABLED = true И reconciliation_enabled=true в окружении бэкенда.
-      const RECON_ENABLED = false;
+      // «Сводка» visibility follows the backend: a single flag
+      // (RECONCILIATION_ENABLED) drives both the tab and the endpoint. The page
+      // asks GET /api/config below and reveals the tab only when it's enabled,
+      // so the two can never drift out of sync.
 
       // ----- tabs -----
       const tabButtons = document.querySelectorAll(".tab-button");
@@ -635,18 +634,26 @@
         });
       });
 
-      if (!RECON_ENABLED) {
-        // Hide the «Сводка» tab + its panel; with a single tab the bar is
-        // pointless, so collapse it and simplify the subtitle. Markup stays in
-        // the DOM (just hidden) so re-enabling is a one-line flip.
+      // Show or hide the «Сводка» tab. When hidden, a single remaining tab makes
+      // the bar pointless, so collapse it and simplify the subtitle. Markup
+      // stays in the DOM either way; the backend decides via /api/config below.
+      function setReconVisible(enabled) {
         const reconBtn = document.querySelector('.tab-button[data-tab="reconciliation"]');
-        if (reconBtn) reconBtn.classList.add("hidden");
-        if (panels.reconciliation) panels.reconciliation.classList.add("hidden");
         const tabsBar = document.querySelector(".tabs");
-        if (tabsBar) tabsBar.classList.add("hidden");
         const subtitle = document.querySelector(".subtitle");
-        if (subtitle) subtitle.textContent = "Загрузка УПД.";
+        if (enabled) {
+          if (reconBtn) reconBtn.classList.remove("hidden");
+          if (tabsBar) tabsBar.classList.remove("hidden");
+          if (subtitle) subtitle.textContent = "Загрузка УПД и сверка с реестром 1С.";
+        } else {
+          if (reconBtn) reconBtn.classList.add("hidden");
+          if (panels.reconciliation) panels.reconciliation.classList.add("hidden");
+          if (tabsBar) tabsBar.classList.add("hidden");
+          if (subtitle) subtitle.textContent = "Загрузка УПД.";
+        }
       }
+      // Hidden until the backend confirms reconciliation is on.
+      setReconVisible(false);
 
       // ============================================================
       // UPLOAD form (multi-file batch)
@@ -997,8 +1004,7 @@
       // ============================================================
       // RECONCILIATION form
       // ============================================================
-      (function initReconciliation() {
-        if (!RECON_ENABLED) return;  // сверка на паузе — форму не активируем
+      function initReconciliation() {
         const form = document.getElementById("reconciliation-form");
         const btn = document.getElementById("reconciliation-btn");
         const resultEl = document.getElementById("reconciliation-result");
@@ -1144,7 +1150,19 @@
         if (reconTabBtn) reconTabBtn.addEventListener("click", refreshPending);
 
         form.addEventListener("submit", submit);
-      })();
+      }
+
+      // Ask the backend whether «Сводка» is enabled; reveal + wire it up if so.
+      // On any error the tab stays hidden — the upload form keeps working.
+      fetch("/api/config")
+        .then(r => (r.ok ? r.json() : null))
+        .then(cfg => {
+          if (cfg && cfg.reconciliation_enabled) {
+            setReconVisible(true);
+            initReconciliation();
+          }
+        })
+        .catch(() => { /* leave «Сводка» hidden */ });
     })();
   </script>
 </body>

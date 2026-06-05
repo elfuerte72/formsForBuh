@@ -277,3 +277,25 @@ async def test_sheets_error_returns_ok_false(client, fake_sheets):
     body = resp.json()
     assert body["ok"] is False
     assert body["error"] == "sheets_read_error"
+
+
+# --- /api/config (frontend bootstrap flag) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_config_reports_reconciliation_enabled(client):
+    """The autouse fixture enables recon → the page will reveal the «Сводка» tab."""
+    async with client as c:
+        resp = await c.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"reconciliation_enabled": True}
+
+
+@pytest.mark.asyncio
+async def test_config_reports_disabled(client, monkeypatch):
+    monkeypatch.setenv("RECONCILIATION_ENABLED", "false")
+    get_settings.cache_clear()
+    async with client as c:
+        resp = await c.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"reconciliation_enabled": False}
