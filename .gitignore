@@ -13,6 +13,7 @@ gen-lang-client-*.json
 *credentials*.json
 
 # Local experiments / scratch
+dokploy_token.txt
 mobile/
 ТЗ_*
 *.docx
