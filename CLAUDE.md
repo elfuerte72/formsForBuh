@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Service for the client "Выборг" (Russian bookkeeping). Serves a custom HTML upload form at `/` with two tabs:
 
-1. **«Загрузка УПД»** — bookkeeper picks a foreman (Юра / Гриша / Боря) and uploads a UPD file (PDF or image). Backend rasterises PDFs to PNG, calls Claude Vision (tool-use) to extract four fields (`organization`, `date`, `amount`, `upd_number`), appends a row to a configured Google Sheet, and returns the result synchronously so the page can show a success / warning / error banner.
+1. **«Загрузка УПД»** — bookkeeper picks a foreman (Юра / Гриша / Боря) and uploads a UPD file (PDF or image). Backend rasterises PDFs to PNG, calls Claude Vision (tool-use) to extract five fields (`organization`, `counterparty`, `date`, `amount`, `upd_number`), appends a row to a configured Google Sheet, and returns the result synchronously so the page can show a success / warning / error banner.
 2. **«Сводка»** — bookkeeper uploads the weekly 1С export (`Реестр документов "Поступление (акт, накладная, УПД)"`, `.xls` / `.xlsx` / `.csv`). Backend parses the register, reads the foreman green-side rows out of the same Google Sheet, and **rewrites the sheet's data area** with side-by-side rows: yellow block (1С) on the left, green block (foreman upload) on the right, status column on the far right (`OK` / `СУММА?` / `NO` / `ЛИШНЕЕ`). The frontend shows four numbers — Совпало / Не хватает / Лишние / Сумма ≠ — and points the bookkeeper at the spreadsheet. The «Сводка» tab also shows a hint when there are foreman uploads that arrived after the last reconciliation (green rows with an empty Status), polled via `GET /api/reconciliation/pending`.
 
-Yandex Forms integration was removed in favour of this self-hosted form. Stage 2 (reconciliation) is implemented; the only outstanding Stage 2 piece is `services/drive.py` (file archival into `dd/mm/yyyy` folders). See `.ai-factory/DESCRIPTION.md`, `.ai-factory/ARCHITECTURE.md`, `.ai-factory/PLAN.md`, `AGENTS.md`, `README.md`.
+Yandex Forms integration was removed in favour of this self-hosted form. Stage 2 (reconciliation) is implemented; the only outstanding Stage 2 piece is `services/drive.py` (file archival into `dd/mm/yyyy` folders). `README.md` is the user-facing overview; **this file (`CLAUDE.md`) is the single source of truth for architecture and conventions** — keep AI guidance here, concrete and current, rather than spread across generated side-docs.
 
 ## Common commands
 
@@ -30,7 +30,7 @@ Docker / Railway: `Dockerfile` is multi-stage (uv builder → slim runtime, non-
 
 ## Architecture
 
-Strict **layered architecture** with enforced downward-only dependencies (see `.ai-factory/ARCHITECTURE.md` for the full rationale and examples). Violations are treated as bugs.
+Strict **layered architecture** with enforced downward-only dependencies; violations are treated as bugs. The shape is a thin linear ETL (handler → pipeline → service → SDK) for a single-counterparty, low-volume workload (one developer, < 100 UPDs/month), so the layers exist only to keep the request path obvious and the SDK boundaries swappable — nothing more abstract is justified.
 
 ```
 api/         → pipelines/ → services/ → external SDKs
@@ -72,7 +72,7 @@ static/      → served via fastapi.staticfiles.StaticFiles (no templating)
 - **Synchronous handlers.** Both `process_upd` and `reconcile` are awaited inline so the form can show the result on submit. There are no `BackgroundTasks`. If processing exceeds the proxy timeout, surface that as a backend issue — don't move work back to the background without revisiting the UX.
 - **Vision extraction rules live in `app/services/vision.py::SYSTEM`** and `.claude/skills/upd-vision-extraction/SKILL.md`. When changing the tool schema or the sentinel behaviour, update **both** — `UPDRecord._sanitize_unknowns` in `app/models.py` depends on the sentinel contract.
 - **1С comparison key.** The reconciliation diff matches on `_normalize(upd_number)` (lowercase / strip / no spaces / no leading zeros). The 1С source column is `Номер вх.` — never use the internal `Номер` column. If you ever need fuzzy matching or `(organization, number)` keys, that's a separate iteration; today the workflow is single-counterparty.
-- **No database, no Clean Architecture.** Stated preference: minimal abstractions, modern Python tooling. Don't add repository patterns, ABCs, or "domain services" around already thin SDKs. If you feel a layer is missing, re-read `.ai-factory/ARCHITECTURE.md` — the anti-pattern list is explicit.
+- **No database, no Clean Architecture.** Stated preference: minimal abstractions, modern Python tooling. Don't add repository patterns, ABCs, or "domain services" around already thin SDKs. Concretely, avoid these anti-patterns: SDK/HTTP logic in `pipelines/*` (services integrate, pipelines orchestrate); a handler reaching `services/*` directly (skips the pipeline — if the urge appears, the pipeline is too thick, so move logic, don't skip it); interfaces/protocols added "just in case" (`SheetsService` needs no `SheetsRepository` ABC — pass the concrete class and override it in tests); scattered `os.getenv` calls (all env access goes through `app/config.py::Settings`); SDK exceptions leaking past `services/*`; and adding a database (the Google Sheet is the system of record).
 - **Stage 2 status.** Reconciliation (`app/api/reconciliation.py`, `app/pipelines/reconciliation.py`, `app/services/onec.py`) is implemented but **paused behind `reconciliation_enabled` (default off)** at the client's request — see "Reconciliation is paused for stage 1" above. The pending rework is multi-organisation matching (today's diff is single-counterparty: key is `_normalize(upd_number)` only). `app/services/drive.py` (file archival into `dd/mm/yyyy` Drive folders) is the only remaining Stage 2 piece — add it in place without restructuring.
 
 ## Tests
