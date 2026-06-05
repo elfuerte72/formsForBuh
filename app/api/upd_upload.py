@@ -9,9 +9,15 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.deps import get_files_service, get_sheets_service, get_vision_service
+from app.deps import (
+    get_drive_service,
+    get_files_service,
+    get_sheets_service,
+    get_vision_service,
+)
 from app.models import BatchUploadResult, Foreman, UploadResult
 from app.pipelines.upd_upload import process_upd_batch
+from app.services.drive import DriveService
 from app.services.files import FilesService
 from app.services.sheets import SheetsService
 from app.services.vision import VisionService
@@ -36,6 +42,7 @@ async def upload_upd(
     files_svc: Annotated[FilesService, Depends(get_files_service)],
     vision: Annotated[VisionService, Depends(get_vision_service)],
     sheets: Annotated[SheetsService, Depends(get_sheets_service)],
+    drive: Annotated[DriveService, Depends(get_drive_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
     """Accept N files in one multipart request, return a :class:`BatchUploadResult`.
@@ -135,6 +142,7 @@ async def upload_upd(
             files=files_svc,
             vision=vision,
             sheets=sheets,
+            drive=drive,
             settings=settings,
             correlation_id=correlation_id,
         )

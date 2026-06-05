@@ -7,9 +7,12 @@ the user is shown the result on the form. All exceptions are translated into
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from app.config import Settings
 from app.core.errors import (
     AppError,
+    DriveUploadError,
     RateLimitExceededError,
     SheetsAppendError,
     UnsupportedFileTypeError,
@@ -17,6 +20,7 @@ from app.core.errors import (
 )
 from app.core.logging import bind_correlation_id, get_logger
 from app.models import UploadResult
+from app.services.drive import DriveService
 from app.services.files import FilesService
 from app.services.sheets import SheetsService
 from app.services.vision import VisionService
@@ -33,16 +37,21 @@ async def process_upd(
     files: FilesService,
     vision: VisionService,
     sheets: SheetsService,
+    drive: DriveService,
     settings: Settings,
     correlation_id: str,
 ) -> UploadResult:
-    """Normalise → Vision → (maybe) Sheets → return :class:`UploadResult`.
+    """Normalise → Vision → (maybe) Drive + Sheets → return :class:`UploadResult`.
 
     Decision rules:
     - ``record.needs_review`` (any required field is None): row is NOT written
       to Sheets. Returned result has ``ok=True, needs_review=True`` so the
       frontend shows a warning. Bookkeeper investigates from the logs.
-    - All four fields present: row is appended, ``sheet_url`` returned.
+    - All four fields present: the original scan is archived to Drive (when
+      ``settings.drive_enabled``), the row is appended with the scan link, and
+      ``sheet_url`` is returned. A Drive failure is *soft*: the row is still
+      written (without a link) and ``warning="drive_upload_failed"`` is set —
+      the registry row is the primary value.
     - SDK error from any service: ``ok=False`` with a stable machine code
       in ``error`` (``unsupported_file_type``, ``vision_extraction_error``,
       ``sheets_append_error``, ``app_error``, ``unexpected_error``).
@@ -83,13 +92,38 @@ async def process_upd(
                     missing_fields=missing,
                 )
 
-            await sheets.append_row(record, foreman=foreman, correlation_id=correlation_id)
+            # Archive the ORIGINAL scan (not the rasterised PNG) so the
+            # bookkeeper sees exactly what the foreman sent. Soft failure:
+            # never block the row on a Drive hiccup.
+            file_url: str | None = None
+            warning: str | None = None
+            if settings.drive_enabled:
+                try:
+                    file_url = await drive.upload(
+                        raw,
+                        filename=filename,
+                        media_type=media_type,
+                        uploaded_on=datetime.now(UTC).date(),
+                    )
+                except DriveUploadError as exc:
+                    log.warning(
+                        "upd.drive_failed", error=str(exc), filename=filename
+                    )
+                    warning = "drive_upload_failed"
+
+            await sheets.append_row(
+                record,
+                foreman=foreman,
+                correlation_id=correlation_id,
+                file_url=file_url,
+            )
             return UploadResult(
                 ok=True,
                 correlation_id=correlation_id,
                 record=record,
                 sheet_url=settings.sheet_url,
                 needs_review=False,
+                warning=warning,
             )
 
         except UnsupportedFileTypeError as exc:
@@ -129,6 +163,7 @@ async def process_upd_batch(
     files: FilesService,
     vision: VisionService,
     sheets: SheetsService,
+    drive: DriveService,
     settings: Settings,
     correlation_id: str,
 ) -> list[UploadResult]:
@@ -150,6 +185,7 @@ async def process_upd_batch(
             files=files,
             vision=vision,
             sheets=sheets,
+            drive=drive,
             settings=settings,
             correlation_id=sub_id,
         )

@@ -11,7 +11,13 @@ import pytest
 import gspread
 
 from app.core.errors import SheetsAppendError, SheetsReadError
-from app.models import ReconRow, UPDRecord
+from app.models import (
+    OneCRecord,
+    ReconciliationPlan,
+    ReconRow,
+    RowAnnotation,
+    UPDRecord,
+)
 from app.services import sheets as sheets_module
 from app.services.sheets import COLUMNS, SheetsService
 
@@ -55,12 +61,15 @@ def test_append_row_writes_green_block_and_leaves_yellow_empty(mock_worksheet):
         amount=12345.67,
         upd_number="UPD-1",
     )
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]  # header only
     svc.append_row_sync(record, foreman="Юра", correlation_id="cid-abc")
 
-    mock_worksheet.append_row.assert_called_once()
-    args, kwargs = mock_worksheet.append_row.call_args
-    values = args[0]
-    assert len(values) == len(COLUMNS) == 12
+    # Writes at the first free row (header only → row 2), NOT via append_row.
+    mock_worksheet.update.assert_called_once()
+    kwargs = mock_worksheet.update.call_args.kwargs
+    assert kwargs["range_name"] == "A2"
+    values = kwargs["values"][0]
+    assert len(values) == len(COLUMNS) == 13
 
     # Yellow block (A..D) — empty on foreman upload.
     assert values[0] == "" and values[1] == "" and values[2] == "" and values[3] == ""
@@ -72,9 +81,27 @@ def test_append_row_writes_green_block_and_leaves_yellow_empty(mock_worksheet):
     assert values[8] == "Гринлайн"         # I — Организация
     assert values[9] == "Юра"              # J — Прораб
     assert isinstance(values[10], str) and "T" in values[10]  # K — ISO timestamp
-    # Status column.
+    # Status column + file link.
     assert values[11] == ""                # L — Статус (filled on reconciliation)
+    assert values[12] == ""                # M — Файл (empty when no Drive link)
     assert kwargs["value_input_option"] == "USER_ENTERED"
+
+
+def test_append_row_writes_file_link_in_column_m(mock_worksheet):
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    record = UPDRecord(
+        organization="Гринлайн", date=date(2026, 4, 22), amount=1.0, upd_number="U-1"
+    )
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]
+    svc.append_row_sync(
+        record,
+        foreman="Юра",
+        correlation_id="cid",
+        file_url="https://drive.google.com/file/d/abc/view",
+    )
+    values = mock_worksheet.update.call_args.kwargs["values"][0]
+    assert len(values) == 13
+    assert values[12] == "https://drive.google.com/file/d/abc/view"
 
 
 def test_append_row_handles_missing_fields(mock_worksheet):
@@ -86,9 +113,10 @@ def test_append_row_handles_missing_fields(mock_worksheet):
         amount=None,
         upd_number=None,
     )
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]
     svc.append_row_sync(record, foreman="Боря", correlation_id="cid")
 
-    values = mock_worksheet.append_row.call_args.args[0]
+    values = mock_worksheet.update.call_args.kwargs["values"][0]
     # Green block stays empty when all fields are missing.
     assert values[4] == "" and values[5] == "" and values[6] == ""
     assert values[7] == "" and values[8] == ""
@@ -99,7 +127,8 @@ def test_append_row_translates_api_error(mock_worksheet):
     fake_response = MagicMock()
     fake_response.status_code = 503
     fake_response.json.return_value = {"error": {"code": 503, "message": "down"}}
-    mock_worksheet.append_row.side_effect = gspread.exceptions.APIError(fake_response)
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]
+    mock_worksheet.update.side_effect = gspread.exceptions.APIError(fake_response)
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
     record = UPDRecord(
         organization="X", date=date(2026, 1, 1), amount=1.0, upd_number="1"
@@ -135,6 +164,7 @@ def test_read_all_records_reads_green_block(mock_worksheet):
             "Юра",                # J foreman
             "2026-04-22T10:00:00+00:00",  # K uploaded_at
             "OK",                 # L status
+            "https://drive/abc",  # M file link
         ],
         # Row 3: NO row from previous reconciliation — yellow only, green empty.
         [
@@ -174,9 +204,11 @@ def test_read_all_records_reads_green_block(mock_worksheet):
     assert rows[0].amount == 12345.67
     assert rows[0].foreman == "Юра"
     assert rows[0].status == "OK"
+    assert rows[0].file_url == "https://drive/abc"
     assert rows[0].source_row == 2
     assert rows[1].foreman == "Гриша"
     assert rows[1].status is None
+    assert rows[1].file_url is None
     assert rows[1].source_row == 4
 
 
@@ -243,102 +275,135 @@ def test_read_all_records_translates_api_error(mock_worksheet):
         svc.read_all_records_sync()
 
 
-# --- rewrite_reconciliation -------------------------------------------------
+# --- annotate_reconciliation (non-destructive) ------------------------------
 
 
-def test_rewrite_reconciliation_clears_writes_and_formats(mock_worksheet):
+def test_annotate_reconciliation_patches_appends_deletes_and_formats(mock_worksheet):
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
-    rows = [
-        ReconRow(
-            status="OK",
-            onec_date=date(2026, 4, 22),
-            onec_counterparty="ООО Поставщик",
-            onec_amount=100.0,
-            onec_upd_number="U-1",
-            green_upd_number="U-1",
-            green_date=date(2026, 4, 22),
-            green_amount=100.0,
-            green_counterparty="ООО Тест",
-            green_organization="Гринлайн",
-            green_foreman="Юра",
-            green_uploaded_at="2026-04-22T10:00:00+00:00",
-        ),
-        ReconRow(
-            status="NO",
-            onec_date=date(2026, 4, 23),
-            onec_counterparty="ООО Другой",
-            onec_amount=500.0,
-            onec_upd_number="U-3",
-        ),
-        ReconRow(
-            status="ЛИШНЕЕ",
-            green_upd_number="X-9",
-            green_date=date(2026, 4, 24),
-            green_amount=50.0,
-            green_counterparty="ООО Где-то",
-            green_organization="Гринлайн",
-            green_foreman="Боря",
-            green_uploaded_at="2026-04-24T10:00:00+00:00",
-        ),
-    ]
-    svc.rewrite_reconciliation_sync(rows)
+    plan = ReconciliationPlan(
+        annotations=[
+            # Row 2: green upload matched → write yellow A:D + auto status.
+            RowAnnotation(
+                source_row=2,
+                onec=OneCRecord(
+                    upd_number="U-1",
+                    date=date(2026, 4, 22),
+                    amount=100.0,
+                    organization="ООО Поставщик",
+                    source_row=2,
+                ),
+                status="OK·авто",
+            ),
+            # Row 3: green-only ЛИШНЕЕ → status only, no yellow write.
+            RowAnnotation(source_row=3, onec=None, status="ЛИШНЕЕ·авто"),
+            # Row 4: manual status preserved → yellow written, status untouched.
+            RowAnnotation(
+                source_row=4,
+                onec=OneCRecord(
+                    upd_number="U-4",
+                    date=date(2026, 4, 25),
+                    amount=200.0,
+                    organization="ООО Поставщик",
+                    source_row=4,
+                ),
+                status=None,
+            ),
+        ],
+        appended_rows=[
+            ReconRow(
+                status="NO·авто",
+                onec_date=date(2026, 4, 23),
+                onec_counterparty="ООО Другой",
+                onec_amount=500.0,
+                onec_upd_number="U-9",
+            )
+        ],
+        deleted_rows=[5],
+        last_data_row=5,
+    )
+    svc.annotate_reconciliation_sync(plan)
 
-    # 1) Cleared the data area below the header.
-    mock_worksheet.batch_clear.assert_called_once_with(["A2:L"])
+    # 1) Never clears the data area.
+    mock_worksheet.batch_clear.assert_not_called()
 
-    # 2) Wrote all rows in one batch starting at A2.
+    # 2) In-place patches: yellow A:D + status L, by row.
+    mock_worksheet.batch_update.assert_called_once()
+    updates = mock_worksheet.batch_update.call_args.args[0]
+    by_range = {u["range"]: u["values"] for u in updates}
+    assert by_range["A2:D2"][0][3] == "U-1"        # yellow upd written
+    assert by_range["L2"][0][0] == "OK·авто"
+    assert "A3:D3" not in by_range                  # ЛИШНЕЕ row has no yellow
+    assert by_range["L3"][0][0] == "ЛИШНЕЕ·авто"
+    assert "A4:D4" in by_range                       # manual row still gets yellow
+    assert "L4" not in by_range                      # ...but status untouched
+
+    # 3) Appended NO row written deterministically at A{last_data_row+1} = A6.
     mock_worksheet.update.assert_called_once()
     kwargs = mock_worksheet.update.call_args.kwargs
-    assert kwargs["range_name"] == "A2"
-    assert kwargs["value_input_option"] == "USER_ENTERED"
-    values = kwargs["values"]
-    assert len(values) == 3
-    assert len(values[0]) == 12
-    # Row 0: OK — yellow + green filled, status L=OK.
-    assert values[0][0] == "2026-04-22"
-    assert values[0][3] == "U-1"
-    assert values[0][4] == "U-1"
-    assert values[0][11] == "OK"
-    # Row 1: NO — green columns empty.
-    assert values[1][4] == ""
-    assert values[1][11] == "NO"
-    # Row 2: ЛИШНЕЕ — yellow columns empty.
-    assert values[2][0] == "" and values[2][3] == ""
-    assert values[2][4] == "X-9"
-    assert values[2][11] == "ЛИШНЕЕ"
+    assert kwargs["range_name"] == "A6"
+    appended = kwargs["values"]
+    assert len(appended) == 1 and len(appended[0]) == 13
+    assert appended[0][3] == "U-9"        # D — № УПД (1С)
+    assert appended[0][4] == ""           # E — green empty
+    assert appended[0][11] == "NO·авто"   # L — status
 
-    # 3) Painted yellow + green backgrounds AND number formats in one batch.
-    # Last data row = 3 rows + header row 1 = 4.
+    # 4) Deleted the stale placeholder row.
+    mock_worksheet.delete_rows.assert_called_once_with(5)
+
+    # 5) Repainted backgrounds + number formats. last_row = 5 + 1 - 1 = 5.
+    # A range can appear twice (background AND numberFormat) so collect lists.
     mock_worksheet.batch_format.assert_called_once()
     formats = mock_worksheet.batch_format.call_args.args[0]
-    by_range = {item["range"]: item["format"] for item in formats}
-    assert "backgroundColor" in by_range["A2:D4"]
-    assert "backgroundColor" in by_range["E2:K4"]
-    # Date columns get DATE format; amount columns get NUMBER; upd numbers stay TEXT.
-    assert by_range["A2:A4"]["numberFormat"]["type"] == "DATE"
-    assert by_range["C2:C4"]["numberFormat"]["type"] == "NUMBER"
-    assert by_range["D2:D4"]["numberFormat"]["type"] == "TEXT"
-    assert by_range["F2:F4"]["numberFormat"]["type"] == "DATE"
-    assert by_range["G2:G4"]["numberFormat"]["type"] == "NUMBER"
+
+    def _fmts(rng):
+        return [f["format"] for f in formats if f["range"] == rng]
+
+    assert any("backgroundColor" in f for f in _fmts("A2:D5"))
+    assert any("backgroundColor" in f for f in _fmts("E2:K5"))
+    assert any("backgroundColor" in f for f in _fmts("M2:M5"))
+    assert any(f.get("numberFormat", {}).get("type") == "DATE" for f in _fmts("A2:A5"))
+    assert any(f.get("numberFormat", {}).get("type") == "NUMBER" for f in _fmts("G2:G5"))
+    assert any(f.get("numberFormat", {}).get("type") == "TEXT" for f in _fmts("M2:M5"))
 
 
-def test_rewrite_reconciliation_empty_clears_only(mock_worksheet):
+def test_annotate_reconciliation_appends_only_when_no_existing_data(mock_worksheet):
+    """Empty sheet (header only): a fresh NO row lands at row 2."""
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
-    svc.rewrite_reconciliation_sync([])
+    plan = ReconciliationPlan(
+        appended_rows=[ReconRow(status="NO·авто", onec_upd_number="U-1")],
+        last_data_row=1,
+    )
+    svc.annotate_reconciliation_sync(plan)
 
-    mock_worksheet.batch_clear.assert_called_once_with(["A2:L"])
+    mock_worksheet.batch_update.assert_not_called()
+    mock_worksheet.update.assert_called_once()
+    assert mock_worksheet.update.call_args.kwargs["range_name"] == "A2"
+    mock_worksheet.delete_rows.assert_not_called()
+    mock_worksheet.batch_format.assert_called_once()
+
+
+def test_annotate_reconciliation_noop_when_nothing_to_write(mock_worksheet):
+    svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
+    svc.annotate_reconciliation_sync(ReconciliationPlan(last_data_row=1))
+
+    mock_worksheet.batch_clear.assert_not_called()
+    mock_worksheet.batch_update.assert_not_called()
     mock_worksheet.update.assert_not_called()
+    mock_worksheet.delete_rows.assert_not_called()
     mock_worksheet.batch_format.assert_not_called()
 
 
-def test_rewrite_reconciliation_translates_api_error(mock_worksheet):
+def test_annotate_reconciliation_translates_api_error(mock_worksheet):
     fake_response = MagicMock()
     fake_response.status_code = 503
     fake_response.json.return_value = {"error": {"code": 503, "message": "down"}}
-    mock_worksheet.batch_clear.side_effect = gspread.exceptions.APIError(fake_response)
+    mock_worksheet.batch_update.side_effect = gspread.exceptions.APIError(fake_response)
 
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
     with pytest.raises(SheetsAppendError):
-        svc.rewrite_reconciliation_sync(
-            [ReconRow(status="NO", onec_upd_number="U-1")]
+        svc.annotate_reconciliation_sync(
+            ReconciliationPlan(
+                annotations=[RowAnnotation(source_row=2, status="NO·авто")],
+                last_data_row=2,
+            )
         )

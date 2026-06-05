@@ -116,6 +116,19 @@ async def reconcile_endpoint(
     return result.model_dump(mode="json")
 
 
+@router.get("/api/config", status_code=status.HTTP_200_OK)
+async def config_endpoint(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, bool]:
+    """Frontend bootstrap config — the single source of truth for feature flags.
+
+    The page reads ``reconciliation_enabled`` to decide whether to reveal the
+    «Сводка» tab, so the tab and the ``/api/reconciliation`` endpoint can never
+    drift out of sync (both follow ``RECONCILIATION_ENABLED``).
+    """
+    return {"reconciliation_enabled": settings.reconciliation_enabled}
+
+
 @router.get("/api/reconciliation/pending", status_code=status.HTTP_200_OK)
 async def pending_endpoint(
     sheets: Annotated[SheetsService, Depends(get_sheets_service)],

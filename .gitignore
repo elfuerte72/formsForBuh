@@ -16,3 +16,7 @@ gen-lang-client-*.json
 mobile/
 ТЗ_*
 *.docx
+client_secret_*.json
+test_data/
+audio*.m4a
+audio*.md

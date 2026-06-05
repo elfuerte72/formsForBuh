@@ -22,6 +22,10 @@ os.environ.setdefault(
 )
 os.environ.setdefault("LOG_LEVEL", "DEBUG")
 os.environ.setdefault("LOG_FORMAT", "pretty")
+# Pin feature flags so tests never inherit a developer's real .env (e.g. a live
+# DRIVE_ENABLED=true). Tests that need a flag on flip it explicitly.
+os.environ.setdefault("RECONCILIATION_ENABLED", "false")
+os.environ.setdefault("DRIVE_ENABLED", "false")
 
 from app.config import get_settings  # noqa: E402
 
