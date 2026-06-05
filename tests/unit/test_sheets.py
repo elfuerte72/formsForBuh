@@ -61,11 +61,14 @@ def test_append_row_writes_green_block_and_leaves_yellow_empty(mock_worksheet):
         amount=12345.67,
         upd_number="UPD-1",
     )
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]  # header only
     svc.append_row_sync(record, foreman="Юра", correlation_id="cid-abc")
 
-    mock_worksheet.append_row.assert_called_once()
-    args, kwargs = mock_worksheet.append_row.call_args
-    values = args[0]
+    # Writes at the first free row (header only → row 2), NOT via append_row.
+    mock_worksheet.update.assert_called_once()
+    kwargs = mock_worksheet.update.call_args.kwargs
+    assert kwargs["range_name"] == "A2"
+    values = kwargs["values"][0]
     assert len(values) == len(COLUMNS) == 13
 
     # Yellow block (A..D) — empty on foreman upload.
@@ -89,13 +92,14 @@ def test_append_row_writes_file_link_in_column_m(mock_worksheet):
     record = UPDRecord(
         organization="Гринлайн", date=date(2026, 4, 22), amount=1.0, upd_number="U-1"
     )
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]
     svc.append_row_sync(
         record,
         foreman="Юра",
         correlation_id="cid",
         file_url="https://drive.google.com/file/d/abc/view",
     )
-    values = mock_worksheet.append_row.call_args.args[0]
+    values = mock_worksheet.update.call_args.kwargs["values"][0]
     assert len(values) == 13
     assert values[12] == "https://drive.google.com/file/d/abc/view"
 
@@ -109,9 +113,10 @@ def test_append_row_handles_missing_fields(mock_worksheet):
         amount=None,
         upd_number=None,
     )
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]
     svc.append_row_sync(record, foreman="Боря", correlation_id="cid")
 
-    values = mock_worksheet.append_row.call_args.args[0]
+    values = mock_worksheet.update.call_args.kwargs["values"][0]
     # Green block stays empty when all fields are missing.
     assert values[4] == "" and values[5] == "" and values[6] == ""
     assert values[7] == "" and values[8] == ""
@@ -122,7 +127,8 @@ def test_append_row_translates_api_error(mock_worksheet):
     fake_response = MagicMock()
     fake_response.status_code = 503
     fake_response.json.return_value = {"error": {"code": 503, "message": "down"}}
-    mock_worksheet.append_row.side_effect = gspread.exceptions.APIError(fake_response)
+    mock_worksheet.get_all_values.return_value = [list(COLUMNS)]
+    mock_worksheet.update.side_effect = gspread.exceptions.APIError(fake_response)
     svc = SheetsService(credentials_json=VALID_CREDS, sheet_id="sheet-1")
     record = UPDRecord(
         organization="X", date=date(2026, 1, 1), amount=1.0, upd_number="1"

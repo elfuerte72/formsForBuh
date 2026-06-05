@@ -123,8 +123,21 @@ class SheetsService:
             "",  # L — Статус (filled on reconciliation)
             file_url or "",  # M — Файл (Drive link to scan)
         ]
+        # Write to the first row after the last one that actually has data.
+        # gspread's append_row uses the Sheets API "append" with OVERWRITE and
+        # whole-sheet table detection, which keys off the leftmost columns — but
+        # our green upload rows leave the yellow block (A:D) EMPTY, so when the
+        # sheet has no 1С data yet the API sees the "table" as just the header
+        # and writes every upload to row 2, each one overwriting the last (lost
+        # rows on multi-file uploads). Computing the next free row explicitly and
+        # writing there is deterministic and order-preserving.
         try:
-            worksheet.append_row(values, value_input_option="USER_ENTERED")
+            next_row = len(worksheet.get_all_values()) + 1
+            worksheet.update(
+                range_name=f"A{next_row}",
+                values=[values],
+                value_input_option="USER_ENTERED",
+            )
         except gspread.exceptions.APIError as exc:
             log.warning("sheets.append.api_error", error=str(exc))
             raise SheetsAppendError(f"Google Sheets API error: {exc}") from exc
