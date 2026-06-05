@@ -141,6 +141,9 @@ class UploadResult(_Base):
     needs_review: bool = False
     missing_fields: list[str] | None = None
     error: str | None = None
+    # Non-fatal note shown alongside a success banner — e.g. the row was
+    # written but the Drive archival of the scan failed ("drive_upload_failed").
+    warning: str | None = None
 
 
 class BatchUploadResult(_Base):
@@ -189,6 +192,7 @@ class SheetUPDRow(_Base):
     foreman: str | None = None
     uploaded_at: str | None = None
     status: str | None = None
+    file_url: str | None = Field(None, description="Drive link to the original scan (column M)")
     source_row: int = Field(description="1-based row index inside the spreadsheet")
 
 
@@ -202,11 +206,13 @@ ReconStatus = Literal["OK", "СУММА?", "NO", "ЛИШНЕЕ"]
 class ReconRow(_Base):
     """One side-by-side row written into the Google Sheet on reconciliation.
 
-    Maps directly onto the 12-column layout in ``app/services/sheets.py``:
-    yellow block (1С), green block (foreman upload), status.
+    Maps directly onto the 13-column layout in ``app/services/sheets.py``:
+    yellow block (1С), green block (foreman upload), status, file link.
+    Used for the brand-new ``NO`` rows appended below existing data; the
+    ``status`` written for these carries the auto-marker (see pipeline).
     """
 
-    status: ReconStatus
+    status: str
     onec_date: Date | None = None
     onec_counterparty: str | None = None
     onec_amount: float | None = None
@@ -218,6 +224,45 @@ class ReconRow(_Base):
     green_organization: str | None = None
     green_foreman: str | None = None
     green_uploaded_at: str | None = None
+    green_file_url: str | None = None
+
+
+class RowAnnotation(_Base):
+    """An in-place patch to one existing sheet row during reconciliation.
+
+    Targets a physical row by ``source_row``. Writes the yellow 1С block
+    (A:D) when ``onec`` is set, and the Status cell (L) when ``status`` is
+    set. A ``None`` field means "leave that part of the row untouched" — this
+    is how a bookkeeper's manually-set status survives re-reconciliation: the
+    pipeline sets ``status=None`` for rows whose current status it must not
+    overwrite. Never touches the green block (E:K) or the file link (M) —
+    those belong to the append-only foreman upload.
+    """
+
+    source_row: int = Field(ge=2)
+    onec: OneCRecord | None = None
+    status: str | None = None
+
+
+class ReconciliationPlan(_Base):
+    """Non-destructive reconciliation write plan produced by the pipeline.
+
+    ``annotations`` patch existing rows in place (no reorder, no clear);
+    ``appended_rows`` are brand-new ``NO`` rows written below the current
+    data; ``deleted_rows`` are stale yellow-only ``NO`` placeholders that a
+    later foreman upload has now matched (so the same УПД would otherwise show
+    twice — once as the new ``OK`` row, once as the old ``NO`` row);
+    ``last_data_row`` is the current last data row so the service knows where
+    the new rows go and how far to repaint the side-by-side backgrounds.
+    """
+
+    annotations: list[RowAnnotation] = Field(default_factory=list)
+    appended_rows: list[ReconRow] = Field(default_factory=list)
+    deleted_rows: list[int] = Field(
+        default_factory=list,
+        description="1-based rows to delete (stale yellow-only NO placeholders)",
+    )
+    last_data_row: int = Field(ge=1, description="Current last data row (1 = header only)")
 
 
 class ReconciliationStats(_Base):

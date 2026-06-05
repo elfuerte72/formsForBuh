@@ -35,3 +35,12 @@ class SheetsReadError(AppError):
 
 class OneCParseError(AppError):
     """Failure parsing a 1С export (xls/xlsx/csv)."""
+
+
+class DriveUploadError(AppError):
+    """Failure archiving the original scan to Google Drive.
+
+    Treated as a *soft* failure in the upload pipeline: the Sheets row is still
+    written (without a link) and the form warns — the scan can be re-attached
+    later. The registry row is the primary value.
+    """

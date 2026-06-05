@@ -90,8 +90,16 @@ def fake_sheets():
     )
     # No register rows carried over from earlier reconciliations by default.
     svc.read_onec_records = AsyncMock(return_value=[])
-    svc.rewrite_reconciliation = AsyncMock(return_value=None)
+    svc.annotate_reconciliation = AsyncMock(return_value=None)
     return svc
+
+
+def _plan_statuses(svc) -> list[str]:
+    """Every status the plan writes — annotated (non-None) + appended."""
+    plan = svc.annotate_reconciliation.await_args.args[0]
+    return [a.status for a in plan.annotations if a.status is not None] + [
+        r.status for r in plan.appended_rows
+    ]
 
 
 @pytest.fixture
@@ -131,11 +139,10 @@ async def test_accept_xls_returns_summary(client, fake_onec, fake_sheets):
     assert "extras" not in body
     fake_onec.parse.assert_called_once()
     fake_sheets.read_all_records.assert_awaited_once()
-    fake_sheets.rewrite_reconciliation.assert_awaited_once()
-    written_rows = fake_sheets.rewrite_reconciliation.await_args.args[0]
-    statuses = [r.status for r in written_rows]
-    assert statuses.count("OK") == 1
-    assert statuses.count("NO") == 1
+    fake_sheets.annotate_reconciliation.assert_awaited_once()
+    statuses = _plan_statuses(fake_sheets)
+    assert statuses.count("OK·авто") == 1
+    assert statuses.count("NO·авто") == 1
 
 
 @pytest.mark.asyncio
@@ -160,9 +167,8 @@ async def test_amount_mismatch_counted_and_flagged(client, fake_onec, fake_sheet
     assert body["ok"] is True
     assert body["stats"]["matched"] == 0
     assert body["stats"]["amount_mismatch"] == 1
-    written_rows = fake_sheets.rewrite_reconciliation.await_args.args[0]
-    statuses = [r.status for r in written_rows]
-    assert statuses.count("СУММА?") == 1
+    statuses = _plan_statuses(fake_sheets)
+    assert statuses.count("СУММА?·авто") == 1
 
 
 @pytest.mark.asyncio
@@ -200,7 +206,7 @@ async def test_reconciliation_disabled_never_touches_sheet(
     # Nothing parsed, nothing read, nothing rewritten — register stays intact.
     fake_onec.parse.assert_not_called()
     fake_sheets.read_all_records.assert_not_awaited()
-    fake_sheets.rewrite_reconciliation.assert_not_awaited()
+    fake_sheets.annotate_reconciliation.assert_not_awaited()
 
 
 @pytest.mark.asyncio

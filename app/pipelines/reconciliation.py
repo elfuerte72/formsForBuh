@@ -14,15 +14,15 @@ never wipes register rows seen in earlier weeks.
 
 from __future__ import annotations
 
-from collections import defaultdict
-
 from app.core.errors import AppError, OneCParseError, SheetsAppendError, SheetsReadError
 from app.core.logging import bind_correlation_id, get_logger
 from app.models import (
     OneCRecord,
-    ReconRow,
+    ReconciliationPlan,
     ReconciliationResult,
     ReconciliationStats,
+    ReconRow,
+    RowAnnotation,
     SheetUPDRow,
 )
 from app.services.onec import OneCParserService
@@ -63,17 +63,25 @@ async def reconcile(
                 carried_over=len(combined_onec) - len(onec_records),
             )
 
-            recon_rows, stats = _diff(combined_onec, sheet_rows)
+            plan, stats = _build_plan(combined_onec, sheet_rows, existing_onec)
             log.info(
                 "reconcile.diff",
                 matched=stats.matched,
                 missing=stats.missing,
                 extras=stats.extras,
                 amount_mismatch=stats.amount_mismatch,
+                annotations=len(plan.annotations),
+                appended=len(plan.appended_rows),
+                deleted=len(plan.deleted_rows),
             )
 
-            await sheets.rewrite_reconciliation(recon_rows)
-            log.info("reconcile.sheet_written", rows=len(recon_rows))
+            await sheets.annotate_reconciliation(plan)
+            log.info(
+                "reconcile.sheet_written",
+                annotations=len(plan.annotations),
+                appended=len(plan.appended_rows),
+                deleted=len(plan.deleted_rows),
+            )
 
             return ReconciliationResult(
                 ok=True,
@@ -170,25 +178,59 @@ def _combine_onec(
     return combined
 
 
-# --- diff -------------------------------------------------------------------
+# --- status protection (variant B: auto-marker) -----------------------------
+
+# Auto-statuses written by reconciliation carry this marker so the next run can
+# tell them apart from a status the bookkeeper set by hand. A status WITHOUT the
+# marker is treated as manual and is never overwritten — that's how «захожу в
+# документ… ставлю OK» survives every later reconciliation.
+_AUTO_MARK = "·авто"
 
 
-def _diff(
-    onec_records: list[OneCRecord],
-    sheet_rows: list[SheetUPDRow],
-) -> tuple[list[ReconRow], ReconciliationStats]:
-    """Build the side-by-side row list + summary counts.
+def _auto(base: str) -> str:
+    """Tag a computed status as auto-generated (e.g. ``"OK"`` → ``"OK·авто"``)."""
+    return f"{base}{_AUTO_MARK}"
 
-    Comparison key: :func:`_normalize` applied to ``upd_number``. Same
-    function on both sides. Pairing strategy:
 
-    - one row per foreman upload (preserves duplicates as separate ``OK``
-      rows in the sheet, both pointing at the same 1С record);
-    - 1С records that no foreman uploaded → ``NO`` rows (yellow only);
-    - foreman uploads without a 1С match → ``ЛИШНЕЕ`` rows (green only).
+def _is_auto(status: str | None) -> bool:
+    """True when a status was written by a previous reconciliation."""
+    return bool(status) and status.endswith(_AUTO_MARK)
+
+
+def _resolve_status(current: str | None, base: str) -> str | None:
+    """Decide what to write into a green row's Status cell (column L).
+
+    - empty / auto-marked → write the freshly computed status with the marker;
+    - manual (non-empty, no marker) → return ``None`` so the service leaves the
+      cell exactly as the bookkeeper set it.
+    """
+    if current and not _is_auto(current):
+        return None
+    return _auto(base)
+
+
+# --- plan -------------------------------------------------------------------
+
+
+def _build_plan(
+    combined_onec: list[OneCRecord],
+    green_rows: list[SheetUPDRow],
+    existing_onec: list[OneCRecord],
+) -> tuple[ReconciliationPlan, ReconciliationStats]:
+    """Build a non-destructive write plan + summary counts.
+
+    Comparison key: :func:`_normalize` applied to ``upd_number`` on both sides.
+
+    The green foreman rows are the append-only backbone: each is annotated in
+    place with the matching 1С block (A:D) and a status (``OK`` / ``СУММА?`` /
+    ``ЛИШНЕЕ``), respecting any manual status. 1С records nobody uploaded become
+    ``NO`` — refreshed in place if a yellow-only placeholder already exists for
+    that number, otherwise appended below. A placeholder a later upload now
+    matches is deleted so the same УПД never shows twice. Foreman duplicates of
+    the same number stay as separate annotated rows.
     """
     onec_index: dict[str, OneCRecord] = {}
-    for rec in onec_records:
+    for rec in combined_onec:
         key = _normalize(rec.upd_number)
         if not key:
             continue
@@ -202,111 +244,122 @@ def _diff(
             continue
         onec_index[key] = rec
 
+    green_source_rows = {row.source_row for row in green_rows}
+    # Existing yellow-only rows (previous NO placeholders), keyed by number.
+    # Rows whose yellow side sits next to a green upload (type-b OK/СУММА? rows)
+    # share that green row's source_row and are handled in the green loop, so
+    # they're excluded here.
+    yellow_only_by_key: dict[str, OneCRecord] = {}
+    for rec in existing_onec:
+        if rec.source_row in green_source_rows:
+            continue
+        key = _normalize(rec.upd_number)
+        if key and key not in yellow_only_by_key:
+            yellow_only_by_key[key] = rec
+
+    annotations: list[RowAnnotation] = []
     matched_keys: set[str] = set()
-    rows: list[ReconRow] = []
     matched = 0
     amount_mismatch = 0
     extras = 0
 
-    foreman_by_key: dict[str, list[SheetUPDRow]] = defaultdict(list)
-    for row in sheet_rows:
+    # Backbone: one annotation per green upload row (duplicates preserved).
+    for row in green_rows:
         key = _normalize(row.upd_number)
         if not key:
             continue
-        foreman_by_key[key].append(row)
-
-    for key, group in foreman_by_key.items():
         onec_rec = onec_index.get(key)
         if onec_rec is not None:
             matched_keys.add(key)
-            for row in group:
-                recon_row = _make_matched_row(onec_rec, row)
-                rows.append(recon_row)
-                if recon_row.status == "OK":
-                    matched += 1
-                else:  # "СУММА?" — number matched but amounts diverge.
-                    amount_mismatch += 1
-                    log.info(
-                        "reconcile.amount_mismatch",
-                        key=key,
-                        onec_amount=onec_rec.amount,
-                        green_amount=row.amount,
-                        onec_row=onec_rec.source_row,
-                        green_row=row.source_row,
-                    )
+            if _amounts_agree(onec_rec.amount, row.amount):
+                matched += 1
+                base = "OK"
+            else:
+                amount_mismatch += 1
+                base = "СУММА?"
+                log.info(
+                    "reconcile.amount_mismatch",
+                    key=key,
+                    onec_amount=onec_rec.amount,
+                    green_amount=row.amount,
+                    onec_row=onec_rec.source_row,
+                    green_row=row.source_row,
+                )
+            annotations.append(
+                RowAnnotation(
+                    source_row=row.source_row,
+                    onec=onec_rec,
+                    status=_resolve_status(row.status, base),
+                )
+            )
         else:
-            for row in group:
-                rows.append(_make_extra_row(row))
-                extras += 1
+            extras += 1
+            annotations.append(
+                RowAnnotation(
+                    source_row=row.source_row,
+                    onec=None,  # no 1С match — leave the yellow block empty
+                    status=_resolve_status(row.status, "ЛИШНЕЕ"),
+                )
+            )
 
-    # Remaining 1С records → NO rows (foreman has not uploaded them yet).
+    # 1С records nobody uploaded → NO. Refresh an existing yellow-only row in
+    # place (amount may have been corrected), else append a fresh NO row below.
+    appended: list[ReconRow] = []
     missing = 0
-    no_rows: list[ReconRow] = []
     for key, rec in onec_index.items():
         if key in matched_keys:
             continue
-        no_rows.append(_make_no_row(rec))
         missing += 1
+        existing = yellow_only_by_key.get(key)
+        if existing is not None:
+            annotations.append(
+                RowAnnotation(
+                    source_row=existing.source_row,
+                    onec=rec,
+                    status=_auto("NO"),
+                )
+            )
+        else:
+            appended.append(_make_no_row(rec))
 
-    # Order: foreman uploads (OK / СУММА? / ЛИШНЕЕ) on top in the order they
-    # appeared in the sheet (preserves source_row), NO rows last so the "still
-    # missing" list sits in its own block at the bottom. ``rows`` never holds a
-    # NO row by construction; the filter just makes the intent explicit.
-    sorted_rows = [r for r in rows if r.status != "NO"] + no_rows
+    # Stale yellow-only NO placeholders now matched by a green upload → delete.
+    deleted_rows = [
+        rec.source_row
+        for key, rec in yellow_only_by_key.items()
+        if key in matched_keys
+    ]
 
+    plan = ReconciliationPlan(
+        annotations=annotations,
+        appended_rows=appended,
+        deleted_rows=deleted_rows,
+        last_data_row=_last_data_row(green_rows, existing_onec),
+    )
     stats = ReconciliationStats(
         matched=matched,
         missing=missing,
         extras=extras,
         amount_mismatch=amount_mismatch,
     )
-    return sorted_rows, stats
+    return plan, stats
 
 
-def _make_matched_row(onec_rec: OneCRecord, foreman_row: SheetUPDRow) -> ReconRow:
-    """Pair a 1С record with a foreman upload that shares its UPD number.
-
-    Status is ``OK`` when the amounts agree (within :data:`_AMOUNT_TOLERANCE`)
-    and ``СУММА?`` when they diverge — the number matched but one side's amount
-    was likely misread, so the bookkeeper should eyeball it.
-    """
-    status = "OK" if _amounts_agree(onec_rec.amount, foreman_row.amount) else "СУММА?"
-    return ReconRow(
-        status=status,
-        onec_date=onec_rec.date,
-        onec_counterparty=onec_rec.organization,
-        onec_amount=onec_rec.amount,
-        onec_upd_number=onec_rec.upd_number,
-        green_upd_number=foreman_row.upd_number,
-        green_date=foreman_row.date,
-        green_amount=foreman_row.amount,
-        green_counterparty=foreman_row.counterparty,
-        green_organization=foreman_row.organization,
-        green_foreman=foreman_row.foreman,
-        green_uploaded_at=foreman_row.uploaded_at,
-    )
+def _last_data_row(
+    green_rows: list[SheetUPDRow], existing_onec: list[OneCRecord]
+) -> int:
+    """Highest occupied data row (1 = header only, no data)."""
+    rows = [r.source_row for r in green_rows] + [r.source_row for r in existing_onec]
+    return max(rows) if rows else 1
 
 
 def _make_no_row(onec_rec: OneCRecord) -> ReconRow:
+    """A brand-new yellow-only ``NO`` row to append below existing data."""
     return ReconRow(
-        status="NO",
+        status=_auto("NO"),
         onec_date=onec_rec.date,
         onec_counterparty=onec_rec.organization,
         onec_amount=onec_rec.amount,
         onec_upd_number=onec_rec.upd_number,
-    )
-
-
-def _make_extra_row(foreman_row: SheetUPDRow) -> ReconRow:
-    return ReconRow(
-        status="ЛИШНЕЕ",
-        green_upd_number=foreman_row.upd_number,
-        green_date=foreman_row.date,
-        green_amount=foreman_row.amount,
-        green_counterparty=foreman_row.counterparty,
-        green_organization=foreman_row.organization,
-        green_foreman=foreman_row.foreman,
-        green_uploaded_at=foreman_row.uploaded_at,
     )
 
 

@@ -9,6 +9,7 @@ from anthropic import AsyncAnthropic
 from fastapi import Depends
 
 from app.config import Settings, get_settings
+from app.services.drive import DriveService
 from app.services.files import FilesService
 from app.services.onec import OneCParserService
 from app.services.sheets import SheetsService
@@ -39,6 +40,17 @@ def get_sheets_service() -> SheetsService:
     return SheetsService(
         credentials_json=settings.google_credentials_json,
         sheet_id=settings.sheet_id,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_drive_service() -> DriveService:
+    settings = get_settings()
+    return DriveService(
+        client_id=settings.drive_oauth_client_id,
+        client_secret=settings.drive_oauth_client_secret,
+        refresh_token=settings.drive_oauth_refresh_token,
+        parent_folder_id=settings.drive_folder_id,
     )
 
 

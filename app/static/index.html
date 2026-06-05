@@ -598,6 +598,11 @@
         upd_number: "Номер УПД"
       };
 
+      // Non-fatal notes shown alongside a success banner (the row was written).
+      const WARNING_MESSAGES = {
+        drive_upload_failed: "Скан не удалось сохранить в архив Drive — строка в таблице записана, скан можно приложить позже."
+      };
+
       function escape(value) {
         const str = String(value ?? "");
         return str
@@ -800,11 +805,15 @@
             const sheetLink = sheetUrl
               ? `<p><a href="${escape(sheetUrl)}" target="_blank" rel="noopener">Открыть таблицу →</a></p>`
               : "";
+            const warnNote = item.warning
+              ? `<p class="meta">⚠️ ${escape(WARNING_MESSAGES[item.warning] || item.warning)}</p>`
+              : "";
             return (
               `<div class="item-banner success">` +
               `<h4>✅ ${escape(title)}</h4>` +
               `<p>УПД распознан и добавлен в таблицу.</p>` +
               renderRecord(item.record) +
+              warnNote +
               fileLink +
               sheetLink +
               `</div>`
@@ -950,12 +959,32 @@
 
           showBatchResult({ ok: batchOk, items: allItems });
 
-          // Reset only when every file succeeded without needs_review.
-          if (batchOk) {
-            form.reset();
-            selectedFiles = [];
-            fileInput.value = "";
-            renderPreview();
+          // Drop files that were COMMITTED (written to the sheet: ok && not
+          // needs_review) from the accumulated selection, so a partial-success
+          // batch never re-uploads them on the next submit — that re-send was
+          // the source of duplicate sheet rows. Files that errored or need
+          // review stay selected for a retry. Matching is by fileKey
+          // (name+size+mtime) against the snapshot we actually sent, so picks
+          // the user made during the POST are unaffected and same-named files
+          // aren't confused.
+          const committedKeys = new Set();
+          for (let i = 0; i < selected.length && i < allItems.length; i++) {
+            const it = allItems[i];
+            if (it && it.ok && !it.needs_review) {
+              committedKeys.add(fileKey(selected[i]));
+            }
+          }
+          if (committedKeys.size > 0) {
+            selectedFiles = selectedFiles.filter(f => !committedKeys.has(fileKey(f)));
+          }
+          fileInput.value = "";
+          renderPreview();
+
+          // Clear the foreman field only once the whole selection is done
+          // (i.e. everything committed) — otherwise keep it for the retry.
+          if (selectedFiles.length === 0) {
+            const foremanEl = document.getElementById("foreman");
+            if (foremanEl) foremanEl.value = "";
           }
 
           btn.disabled = false;

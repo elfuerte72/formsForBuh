@@ -14,8 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from app.core.errors import SheetsAppendError, VisionExtractionError
-from app.deps import get_files_service, get_sheets_service, get_vision_service
+from app.core.errors import DriveUploadError, SheetsAppendError, VisionExtractionError
+from app.deps import (
+    get_drive_service,
+    get_files_service,
+    get_sheets_service,
+    get_vision_service,
+)
 from app.main import app as real_app
 from app.models import DownloadedFile, UPDRecord
 
@@ -70,10 +75,18 @@ def fake_sheets():
 
 
 @pytest.fixture
-def client(app, fake_files, fake_vision, fake_sheets):
+def fake_drive():
+    svc = MagicMock()
+    svc.upload = AsyncMock(return_value="https://drive.google.com/file/d/xyz/view")
+    return svc
+
+
+@pytest.fixture
+def client(app, fake_files, fake_vision, fake_sheets, fake_drive):
     app.dependency_overrides[get_files_service] = lambda: fake_files
     app.dependency_overrides[get_vision_service] = lambda: fake_vision
     app.dependency_overrides[get_sheets_service] = lambda: fake_sheets
+    app.dependency_overrides[get_drive_service] = lambda: fake_drive
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
@@ -347,3 +360,58 @@ async def test_batch_mixed_valid_and_invalid(client, fake_sheets):
     assert body["items"][1]["filename"] == "note.txt"
     # The invalid file does NOT block the valid one from being appended.
     fake_sheets.append_row.assert_awaited_once()
+
+
+# --- Drive archival (feature-flagged) --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_drive_disabled_skips_upload(client, fake_drive, fake_sheets):
+    """Default (drive off): the scan is never uploaded; the row has no link."""
+    async with client as c:
+        resp = await c.post("/api/upload", files=[_png()], data={"foreman": "Юра"})
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["ok"] is True
+    fake_drive.upload.assert_not_awaited()
+    assert fake_sheets.append_row.await_args.kwargs["file_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_drive_enabled_attaches_link(client, fake_sheets, fake_drive, monkeypatch):
+    from app.config import get_settings as _gs
+
+    settings = _gs()
+    monkeypatch.setattr(settings, "drive_enabled", True, raising=False)
+
+    async with client as c:
+        resp = await c.post("/api/upload", files=[_png()], data={"foreman": "Юра"})
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["ok"] is True
+    assert item["warning"] is None
+    fake_drive.upload.assert_awaited_once()
+    assert (
+        fake_sheets.append_row.await_args.kwargs["file_url"]
+        == "https://drive.google.com/file/d/xyz/view"
+    )
+
+
+@pytest.mark.asyncio
+async def test_drive_failure_is_soft(client, fake_sheets, fake_drive, monkeypatch):
+    """A Drive failure must NOT drop the row — it's written without a link and
+    the item carries a soft warning."""
+    from app.config import get_settings as _gs
+
+    settings = _gs()
+    monkeypatch.setattr(settings, "drive_enabled", True, raising=False)
+    fake_drive.upload = AsyncMock(side_effect=DriveUploadError("storage quota"))
+
+    async with client as c:
+        resp = await c.post("/api/upload", files=[_png()], data={"foreman": "Юра"})
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["ok"] is True
+    assert item["needs_review"] is False
+    assert item["warning"] == "drive_upload_failed"
+    fake_sheets.append_row.assert_awaited_once()
+    assert fake_sheets.append_row.await_args.kwargs["file_url"] is None
