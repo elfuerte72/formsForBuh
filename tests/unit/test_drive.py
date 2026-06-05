@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
 from app.core.errors import DriveUploadError
@@ -106,6 +107,24 @@ def test_upload_translates_http_error(mock_files):
     resp.reason = "Forbidden"
     mock_files.create.return_value.execute.side_effect = HttpError(
         resp, b'{"error": {"message": "storage quota exceeded"}}'
+    )
+    with pytest.raises(DriveUploadError):
+        _svc().upload_sync(
+            b"d",
+            filename="a.png",
+            media_type="image/png",
+            uploaded_on=date(2026, 6, 5),
+        )
+
+
+def test_refresh_error_translated_to_drive_upload_error(mock_files):
+    """An expired/revoked refresh token (``invalid_grant``) surfaces as a
+    ``RefreshError`` on the first call (the folder lookup). It must become a
+    ``DriveUploadError`` so the upload pipeline keeps it a SOFT failure and
+    still writes the УПД row — a bad Drive token must never block the sheet.
+    """
+    mock_files.list.return_value.execute.side_effect = RefreshError(
+        "invalid_grant: Bad Request", {"error": "invalid_grant"}
     )
     with pytest.raises(DriveUploadError):
         _svc().upload_sync(

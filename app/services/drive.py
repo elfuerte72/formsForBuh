@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date as Date
 
+from google.auth.exceptions import GoogleAuthError
 from google.oauth2.credentials import Credentials as UserCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -119,6 +120,12 @@ class DriveService:
         except HttpError as exc:
             log.warning("drive.upload.api_error", error=str(exc), filename=filename)
             raise DriveUploadError(f"Google Drive API error: {exc}") from exc
+        except GoogleAuthError as exc:
+            # Expired / revoked / malformed refresh token (``invalid_grant``).
+            # Translate to DriveUploadError so the upload pipeline treats it as a
+            # SOFT failure — the УПД row is still written, just without a link.
+            log.warning("drive.upload.auth_error", error=str(exc), filename=filename)
+            raise DriveUploadError(f"Google Drive auth error: {exc}") from exc
         except Exception as exc:  # pragma: no cover - defensive
             log.exception("drive.upload.unexpected")
             raise DriveUploadError(
@@ -198,6 +205,11 @@ class DriveService:
         except HttpError as exc:
             log.warning("drive.folder.list_api_error", error=str(exc), name=name)
             raise DriveUploadError(f"Google Drive API error: {exc}") from exc
+        except GoogleAuthError as exc:
+            # First network call → the lazy token refresh surfaces here. A bad /
+            # expired refresh token (``invalid_grant``) must stay a SOFT failure.
+            log.warning("drive.folder.list_auth_error", error=str(exc), name=name)
+            raise DriveUploadError(f"Google Drive auth error: {exc}") from exc
         files = resp.get("files", [])
         return files[0]["id"] if files else None
 
@@ -216,5 +228,8 @@ class DriveService:
         except HttpError as exc:
             log.warning("drive.folder.create_api_error", error=str(exc), name=name)
             raise DriveUploadError(f"Google Drive API error: {exc}") from exc
+        except GoogleAuthError as exc:
+            log.warning("drive.folder.create_auth_error", error=str(exc), name=name)
+            raise DriveUploadError(f"Google Drive auth error: {exc}") from exc
         log.info("drive.folder.created", name=name, folder_id=created["id"])
         return created["id"]
